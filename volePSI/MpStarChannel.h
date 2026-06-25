@@ -40,7 +40,6 @@ private:
     uint32_t mSenderCount = 0;
     coproto::Socket mSpSock;                     // used by sender
     std::vector<coproto::Socket> mSenderSocks;   // used by SP
-    std::vector<std::mutex> mSenderSendMutex;    // one mutex per destination socket (SP only)
 
     // sender-side receive buffer + per-source limits
     static constexpr uint32_t kMaxBufferedFrames = 1024;

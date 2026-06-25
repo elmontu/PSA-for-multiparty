@@ -55,3 +55,58 @@ This sub-step is **scaffolding, not production code**. It will not compile or ru
 
 - **HIGH — smoke test will fail today.** The smoke test expects `frontend -mpsa` to run end-to-end, which depends on the MpsaDriver TODOs being resolved (coproto API, CSV parser, Phase 0 aggregation, relayLoop drive). Treat the test as a regression contract for *after* those gaps are filled, not a current-state validator.
 - **LOW — fixed-IP smoke test.** Uses `127.0.0.1`; multi-host runs need address parameterization.
+
+## Second round of fixes — closed and remaining
+
+### Closed (this commit)
+- MpShuffleDriver `recvBlocksOnSocket` short-read: now loops with `recvExact` pattern.
+- MpStarCrypto helpers (`serializeBlocks` / `deserializeBlocks` / `aeadEncrypt` / `aeadDecrypt`) extracted into a shared header so MpsaDriver and MpShuffleDriver share them.
+- MpStarChannel `relayLoop`: replaced mutex-across-`co_await` with per-destination drain pattern (one producer task per sender socket → per-dest AsyncQueue → one consumer task per dest socket). Per-task try/catch added for error isolation. Removed dead `mSenderSendMutex` member.
+- MpsaDriver: `parseCsv` now uses the exported `readSet()` from fileBased.h. Phase 0 mask aggregation wired (sender 0 collects r_j from peers via AEAD, others ship to sender 0). `relayLoop` driven concurrently with shuffle via `macoro::when_any`.
+
+### Still remaining (need a build to verify)
+- **HIGH — coproto TCP API names.** `asioAccept` / `asioConnect` are still placeholder stubs returning empty `coproto::Socket{}`. The build will pull coproto; replace with the actual API (likely `coproto::AsioAcceptor` and `coproto::AsioSocket::connect`) once the headers are on disk.
+- **HIGH — OSN semantics.** Still unverified — depends on actual `osn/OSNSender.cpp` behavior. See TODO comment in MpShuffleDriver.cpp.
+- **MED — `macoro::when_any` return shape.** Code destructures `auto [shuffled, _]` — verify against the macoro release in your build.
+- **MED — `macoro::sleep_for` symbol.** Used inside AsyncQueue `pop()` busy-wait in MpStarChannel.cpp. If macoro names it differently, adjust.
+- **MED — last-sender reveal port.** `runSenderRole` connects the last sender to `basePort + 2*N` for the final reveal; SP doesn't currently `asioAccept` on that port. Either add the accept OR collapse the final-reveal into `osnSocksPerRound.back()` everywhere.
+- **LOW — AsyncQueue busy-wait.** 1ms polling is fine for prototype; replace with coroutine-aware queue for production.
+
+## Third round — Phase 4 fixes
+
+### Closed (this commit)
+- New `volePSI/MpSpHandshake.{h,cpp}` — X25519 DH between SP and each sender, derives a per-pair symmetric key. Wired into `MpsaDriver` BEFORE MPSI runs.
+- `MpsaDriver`: masked-column transmission now AEAD-wrapped under the SP key (sender `aeadEncrypt(m_i)` → SP `aeadDecrypt`). SP detects tampering / forgery before XOR'ing into M_0.
+- New `volePSI/RsMpsiVole.{h,cpp}` — scaffolded API surface for the future swap from Simple-Hash MPSI to upstream 2-party VOLE-PSI (KMPRT-style with SP as common party). Public API drop-in compatible with `RsMpsi3rdP*`. All upstream call sites are TODO stubs that throw at runtime; compiles, doesn't run.
+
+### Still remaining (Phase 4 — implementation, not scaffolding)
+- **HIGH — RsMpsiVole upstream wiring.** Needs the actual `volePSI::RsPsiSender` / `RsPsiReceiver` from Visa-Research/volepsi pulled in by the build. Name collision with the local Simple-Hash `RsPsi.h` — see header comment in RsMpsiVole.cpp.
+- **HIGH — malicious-secure shuffle.** Cascade-OSN currently semi-honest. Upgrade path per `docs/RESEARCH_MPSI.md` §4: MACs on intermediate shares + RSS-3PC shuffle (N=3) or SSS chain (N≥4).
+- **MED — sender↔sender malicious hardening.** Phase 0 AEAD'd already; need commit-and-open on OPRF outputs to prevent equivocation under malicious senders.
+- **MED — replay protection on AEAD.** secretbox nonces are random; safe per-session but no sequence number. If sessions are reused, add a session salt to the KDF.
+
+## Fourth round — Concrete residuals from Phase 4
+
+### Closed (this commit)
+- **HIGH** coproto TCP API: stubs replaced with real `coproto::asioConnect(addr, isServer)` — mirrors the existing 2-party `doFileSpHshPSIwithOSN` pattern in `fileBased.cpp`. Wrapped in `#ifdef COPROTO_ENABLE_BOOST` like the upstream code. Senders connect to `localhost:<port>`, SP accepts.
+- **MED** Last-sender reveal port: SP now `spAccept(basePort + 2*N)` and pushes the resulting socket onto `osnSocksPerRound.back()` so `MpShuffleDriver::runSp`'s existing reveal-recv-on-last-socket logic finds it.
+- **MED** `macoro::when_any` not in this build's macoro release. Replaced with `std::thread` for `relayLoop`, with shuffle driving the foreground; thread detaches when shuffle returns and is reaped on process exit.
+- **MED** `macoro::sleep_for` not in macoro release. Replaced with `std::this_thread::sleep_for` in AsyncQueue. Acceptable if executor is multi-threaded (each consumer on its own thread); wedges on single-threaded executor — TODO at top of MpStarChannel.cpp.
+- **MED** `macoro::when_all(vector<task>)` not in macoro release (only variadic `when_all_ready` is, per RsPsi.cpp:239). Replaced with one `std::thread` per producer/consumer, each calling `macoro::sync_wait` on its own task body. Ugly but correct; relayLoop's outer signature stays `macoro::task<>`.
+
+### Still remaining (research-grade)
+- **HIGH** OSN role/semantics verification: this assumes `OSNSender::run_osn` overwrites `input_vec` with sender's new share = π(input) XOR correlation. Verify by in-process unit test after first build.
+- **HIGH** RsMpsiVole upstream wiring (Zhang 2023/1690 or KMPRT).
+- **HIGH** Malicious-secure shuffle (RSS-3PC or SSS chain).
+- **MED** AsyncQueue still busy-waits; replace with proper coroutine-aware queue for production.
+- **LOW** Production deployment would `localhost` → real hostnames from a config; trivial.
+
+## Round 5 — small concrete hardening
+
+### Closed (this commit)
+- **MED** AsyncQueue: replaced busy-wait with `std::condition_variable`. push() notifies, pop() blocks on cv.wait. No more 1ms tight loops; works under any executor model.
+- **MED** Offline unit tests: `tests/unit/test_mpstar_crypto.cpp` covers 9 cases (AEAD round-trip, empty plain, MAC mismatch, nonce mismatch, wrong key, short input, serialize round-trip, wrong-count deserialize, empty blocks). Opt-in via `-DVOLE_PSI_BUILD_TESTS=ON`.
+- **MED** Session-id binding: SP picks a random 32-byte session ID at the top of every MPSA run, broadcasts to all senders. All AEAD keys are derived from `(base_key, session_id, purpose)` via RandomOracle KDF. Catches cross-session replay even with long-term DH-key reuse. New function: `volePSI::mpstar::deriveSessionKey`.
+
+### Scope clarification
+- The original "commit-and-open on Phase 0 r_i exchange" item was downscoped: in our exact topology r_j has only ONE recipient (sender 0), so the across-recipients-consistency property doesn't apply. Real malicious-sender protection here would need Pedersen-style commitments or a PKI signature scheme; both are research-grade and out of scope for a small fix. The session-id binding above is the substituted small-fix that does provide a real new property (replay protection).

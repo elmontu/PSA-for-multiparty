@@ -61,9 +61,16 @@ macoro::task<void> sendBlocksOnSocket(coproto::Socket& sock, std::vector<oc::blo
 
 macoro::task<std::vector<oc::block>> recvBlocksOnSocket(coproto::Socket& sock, size_t count)
 {
-    std::vector<uint8_t> buf(count * kBlockSize);
-    // TODO: loop if coproto::Socket::recv can short-read
-    co_await sock.recv(buf);
+    const std::size_t total = count * kBlockSize;
+    std::vector<uint8_t> buf(total);
+    std::size_t got = 0;
+    while (got < total) {
+        auto span = coproto::span<uint8_t>(buf.data() + got, total - got);
+        auto n = co_await sock.recv(span);
+        if (n == 0)
+            throw std::runtime_error("MpShuffleDriver: connection closed mid-recv");
+        got += n;
+    }
     co_return deserializeBlocks(buf, count);
 }
 

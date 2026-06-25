@@ -3,8 +3,11 @@ set(SRCS
     "fileBased.cpp"
     "MpStarChannel.cpp"
     "MpStarSetup.cpp"
+    "MpStarCrypto.cpp"
+    "MpSpHandshake.cpp"
     "MpShuffleDriver.cpp"
     "RsMpsi.cpp"
+    "RsMpsiVole.cpp"
     "MpsaDriver.cpp"
     )
 
