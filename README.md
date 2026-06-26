@@ -29,6 +29,59 @@ The system:
 
 For complete technical details, see our [paper](https://arxiv.org/abs/2410.04746).
 
+## Multiparty Extension (`-mpsa`)
+
+This fork extends the original 2-party PSA to **N data-contributing senders**
+(N >= 2) coordinated by the Service Provider. The cryptographic design and
+deferred items are documented in [`docs/RESEARCH_MPSI.md`](docs/RESEARCH_MPSI.md)
+and [`docs/DEFERRED_AUDITS.md`](docs/DEFERRED_AUDITS.md).
+
+What's added:
+- N-party Simple-Hash MPSI (`volePSI/RsMpsi.{h,cpp}`); upstream-VOLE-PSI
+  swap scaffolded in `RsMpsiVole.*`.
+- Star-cascade oblivious shuffle (`volePSI/MpShuffleDriver.*`) reusing the
+  existing 2-party Benes OSN.
+- Pairwise sender↔sender X25519 DH (`MpStarSetup`) and SP↔sender DH
+  (`MpSpHandshake`).
+- AEAD on the masked payload column (libsodium `secretbox_easy`) with
+  per-session key binding to defeat cross-session replay.
+- Build dependency: `libsodium-dev` (Ubuntu/Debian package). Dockerfile
+  already installs it; bare-metal builds need it on the system.
+
+### CLI
+
+```
+# Service Provider
+./out/build/linux/frontend/frontend -mpsa -N 3 -r 0 -port 17500 -out dataset/out_mpsa.csv
+
+# Sender i (one process per sender, i in 0..N-1)
+./out/build/linux/frontend/frontend -mpsa -N 3 -r 1 -i 0 -port 17500 -host localhost -in dataset/sender_0.csv
+./out/build/linux/frontend/frontend -mpsa -N 3 -r 1 -i 1 -port 17500 -host localhost -in dataset/sender_1.csv
+./out/build/linux/frontend/frontend -mpsa -N 3 -r 1 -i 2 -port 17500 -host localhost -in dataset/sender_2.csv
+```
+
+CSV format is unchanged: column 1 = ID, column 2 = payload.
+
+### Smoke test
+
+```bash
+./tests/run_mpsa_smoke.sh
+```
+
+Generates synthetic data (100 IDs in the intersection out of 1000 per sender)
+via `tests/gen_mpsa_dataset.py`, spawns SP + N senders on loopback, asserts
+the output file has 100 rows.
+
+### Offline unit tests (no network)
+
+```bash
+python3 build.py -DVOLE_PSI_BUILD_TESTS=ON -DVOLE_PSI_ENABLE_BOOST=ON
+./out/build/linux/tests/unit/test_mpstar_crypto
+```
+
+Covers AEAD round-trip, MAC/nonce/key-mismatch detection, block
+(de)serialization, including the empty and wrong-count edge cases.
+
 ## Installation & Run
 ⚠️ Note: Building the application may take more than 20 minutes to complete depending on your system.
 

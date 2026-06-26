@@ -70,7 +70,7 @@ macoro::task<MpStarSetup> MpStarSetup::runSender(MpStarChannel& chan, uint32_t s
         info[7] = static_cast<uint8_t>(b);
         oracle.Update(info.data(), static_cast<uint32_t>(info.size()));
 
-        oracle.Final(setup.mPairKeys[j].data(), 32);
+        oracle.Final(setup.mPairKeys[j].data());
     }
 
     co_return setup;

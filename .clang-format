@@ -1,0 +1,23 @@
+---
+# Applies to new MPSA files (Mp*, RsMpsi*, MpsaDriver*) and the unit tests.
+# Matches the indentation style already in volePSI/RsPsi.cpp + osn/.
+Language: Cpp
+BasedOnStyle: Google
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+AccessModifierOffset: -4
+NamespaceIndentation: None
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction: true
+  AfterClass: false
+  AfterControlStatement: Never
+  AfterNamespace: false
+SpaceBeforeParens: ControlStatements
+PointerAlignment: Left
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+ReflowComments: true
+SortIncludes: false

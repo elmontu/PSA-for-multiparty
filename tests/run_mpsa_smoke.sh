@@ -1,8 +1,10 @@
 #!/bin/bash
 # End-to-end MPSA smoke test. Requires the frontend binary already built.
-# NOTE: this will not pass until the HIGH-severity TODOs in MpsaDriver.cpp
-# (coproto API stubs, CSV parser, Phase 0 aggregation, relayLoop drive) are
-# resolved. See DEFERRED_AUDITS.md.
+# The HIGH-severity wiring TODOs were closed in subsequent commits; only
+# OSN role/semantics verification and the real VOLE-PSI MPSI swap remain
+# (see docs/DEFERRED_AUDITS.md). The smoke test may still fail if the
+# OSN semantic assumption in MpShuffleDriver doesn't match the actual
+# osn/OSNSender.cpp behavior.
 set -euo pipefail
 
 N=3
@@ -20,7 +22,7 @@ sleep 1
 echo "Spawning $N senders..."
 SENDER_PIDS=()
 for i in $(seq 0 $((N-1))); do
-    "$BUILD" -mpsa -N "$N" -r 1 -i "$i" -port "$PORT" -in "dataset/sender_${i}.csv" &
+    "$BUILD" -mpsa -N "$N" -r 1 -i "$i" -port "$PORT" -host localhost -in "dataset/sender_${i}.csv" &
     SENDER_PIDS+=($!)
 done
 

@@ -27,30 +27,16 @@ static inline void writeU32BE(uint8_t* buf, uint32_t val) noexcept {
     buf[3] = static_cast<uint8_t>(val & 0xFF);
 }
 
+// coproto::Socket::recv/send fill the buffer fully and throw on EOF/error;
+// they return void. No loop or short-read handling needed.
 static macoro::task<std::vector<uint8_t>> recvExact(coproto::Socket& sock, std::size_t size) {
     std::vector<uint8_t> buf(size);
-    std::size_t received = 0;
-    while (received < size) {
-        auto span = coproto::span<uint8_t>(buf.data() + received, size - received);
-        auto n = co_await sock.recv(span);
-        if (n == 0) {
-            throw std::runtime_error("MpStarChannel: connection closed while reading");
-        }
-        received += n;
-    }
+    co_await sock.recv(coproto::span<uint8_t>(buf.data(), buf.size()));
     co_return buf;
 }
 
 static macoro::task<> sendExact(coproto::Socket& sock, const uint8_t* data, std::size_t size) {
-    std::size_t sent = 0;
-    while (sent < size) {
-        auto span = coproto::span<const uint8_t>(data + sent, size - sent);
-        auto n = co_await sock.send(span);
-        if (n == 0) {
-            throw std::runtime_error("MpStarChannel: send returned 0");
-        }
-        sent += n;
-    }
+    co_await sock.send(coproto::span<const uint8_t>(data, size));
 }
 
 // Max single-frame payload accepted off the wire. Hard upper bound to
@@ -176,8 +162,8 @@ struct FrameForDest {
 
 // Thread-blocking queue with condition_variable. The lock is NEVER held
 // across co_await. pop() blocks the calling thread (via wait) until push()
-// signals. Each consumer runs in its own std::thread (see relayLoop) so
-// blocking is correct.
+// signals OR stop is set. Each consumer runs in its own std::thread (see
+// relayLoop) so blocking is correct.
 template<typename T>
 class AsyncQueue {
     std::deque<T> mItems;
@@ -197,12 +183,19 @@ public:
         mCv.notify_one();
     }
 
-    // Synchronous blocking pop. Returned as a macoro::task<T> so the call
-    // site reads naturally (`co_await q.pop()`) but no real coroutine
-    // suspension happens — the calling thread blocks on the cv.
-    macoro::task<T> pop() {
+    // Wake all waiters; called when shutdown is requested.
+    void notifyAll() {
+        mCv.notify_all();
+    }
+
+    // Blocking pop honoring a stop flag. Throws if stop becomes true while
+    // the queue is empty.
+    macoro::task<T> popOrStop(std::atomic<bool>& stop) {
         std::unique_lock<std::mutex> lk(mMu);
-        mCv.wait(lk, [this] { return !mItems.empty(); });
+        mCv.wait(lk, [this, &stop] { return !mItems.empty() || stop.load(); });
+        if (mItems.empty()) {
+            throw std::runtime_error("AsyncQueue: stop requested");
+        }
         T val = std::move(mItems.front());
         mItems.pop_front();
         co_return val;
@@ -231,12 +224,14 @@ macoro::task<> MpStarChannel::relayLoop() {
     std::vector<std::thread> threads;
     threads.reserve(2 * mSenderCount);
 
-    // Producers: one per sender socket.
+    // Producers: one per sender socket. Each exits on EOF/error (sender
+    // disconnect) or when requestStop() has been called and the in-flight
+    // recv next returns/throws.
     for (uint32_t i = 0; i < mSenderCount; ++i) {
         threads.emplace_back([this, i, &queues]() {
             try {
                 auto body = [this, i, &queues]() -> macoro::task<> {
-                    while (true) {
+                    while (!mStop.load()) {
                         auto [fromIdx, toIdx, payload] = co_await recvFrame(mSenderSocks[i]);
 
                         if (fromIdx != i) {
@@ -251,20 +246,23 @@ macoro::task<> MpStarChannel::relayLoop() {
                 };
                 macoro::sync_wait(body());
             } catch (const std::exception& e) {
-                std::cerr << "MpStarChannel SP relay: producer " << i
-                          << " error: " << e.what() << std::endl;
+                if (!mStop.load()) {
+                    std::cerr << "MpStarChannel SP relay: producer " << i
+                              << " error: " << e.what() << std::endl;
+                }
             }
         });
     }
 
     // Consumers: one per destination socket. Only this thread writes to
-    // mSenderSocks[j].
+    // mSenderSocks[j]. Each consumer wakes on either a queue item or
+    // mStop being set.
     for (uint32_t j = 0; j < mSenderCount; ++j) {
         threads.emplace_back([this, j, &queues]() {
             try {
                 auto body = [this, j, &queues]() -> macoro::task<> {
                     while (true) {
-                        auto item = co_await queues[j].pop();
+                        auto item = co_await queues[j].popOrStop(mStop);
 
                         std::array<uint8_t, 12> header;
                         writeU32BE(header.data(), item.fromIdx);
@@ -280,16 +278,30 @@ macoro::task<> MpStarChannel::relayLoop() {
                 };
                 macoro::sync_wait(body());
             } catch (const std::exception& e) {
-                std::cerr << "MpStarChannel SP relay: consumer " << j
-                          << " error: " << e.what() << std::endl;
+                if (!mStop.load()) {
+                    std::cerr << "MpStarChannel SP relay: consumer " << j
+                              << " error: " << e.what() << std::endl;
+                }
             }
         });
     }
+
+    // Watcher: when mStop is set, wake every consumer's pop().
+    threads.emplace_back([this, &queues]() {
+        while (!mStop.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        for (auto& q : queues) q.notifyAll();
+    });
 
     for (auto& t : threads) {
         if (t.joinable()) t.join();
     }
     co_return;
+}
+
+void MpStarChannel::requestStop() {
+    mStop.store(true);
 }
 
 } // namespace volePSI

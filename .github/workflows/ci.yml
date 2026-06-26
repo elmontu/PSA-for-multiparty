@@ -1,0 +1,53 @@
+name: build-and-unit-tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential gdb libssl-dev \
+            gcc-11 g++-11 \
+            python3 python3-pip python3-setuptools \
+            wget curl libboost-all-dev libtool \
+            pkg-config libsodium-dev \
+            git
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 100
+
+      - name: Install CMake 4.0.0
+        run: |
+          wget -q https://cmake.org/files/v4.0/cmake-4.0.0-linux-x86_64.tar.gz
+          sudo tar -xzf cmake-4.0.0-linux-x86_64.tar.gz --strip-components=1 -C /usr/local
+          cmake --version
+
+      - name: Build with unit tests enabled
+        run: |
+          python3 build.py -DVOLE_PSI_ENABLE_BOOST=ON -DVOLE_PSI_BUILD_TESTS=ON
+
+      - name: Run offline unit tests
+        run: |
+          # tests are opt-in via -DVOLE_PSI_BUILD_TESTS=ON; the exact output
+          # path follows the preset's build dir.
+          for t in out/build/linux/tests/unit/test_mpstar_crypto \
+                   out/build/linux/tests/unit/test_kdf; do
+              echo "=== running $t ==="
+              "$t"
+          done
+
+      - name: Print disk usage (debug)
+        if: always()
+        run: df -h

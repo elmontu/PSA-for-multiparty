@@ -110,3 +110,43 @@ This sub-step is **scaffolding, not production code**. It will not compile or ru
 
 ### Scope clarification
 - The original "commit-and-open on Phase 0 r_i exchange" item was downscoped: in our exact topology r_j has only ONE recipient (sender 0), so the across-recipients-consistency property doesn't apply. Real malicious-sender protection here would need Pedersen-style commitments or a PKI signature scheme; both are research-grade and out of scope for a small fix. The session-id binding above is the substituted small-fix that does provide a real new property (replay protection).
+
+## Round 9 — research-grade items
+
+### Closed (this commit)
+- **HIGH** AEAD on cascade `rho_k` and final-reveal `R`. Previously cleartext on the SP socket; now AEAD-wrapped under the session-bound SP key. Tampered `rho_k` is rejected at SP. Closes one half of the cascade-malicious-hardening gap. `MpShuffleDriver::runSender` and `runSp` now take the SP key(s); `MpsaDriver` plumbs them through.
+- **HIGH** OSN semantics test scaffold: `tests/unit/test_osn_semantics.cpp` is a compile-ready in-process test that runs the cascade invariant (`newR XOR newM == pi(R XOR M)`) against the real `osn/OSNSender.cpp` + `osn/OSNReceiver.cpp`. The `makeSocketPair()` helper at the top is a stub that returns "skipped" (exit code 77) until the build-time coproto in-process socket-pair API is wired in. CMake target added.
+- **DOC** `docs/MALICIOUS_UPGRADE_ROADMAP.md` written. Three paths (RSS-3PC for N=3, CGP chain for N≥4, lightweight Ed25519 signatures + commit-and-open for attribution). Each with paper refs, subtask decomposition, effort estimate.
+- **DOC** `docs/RSMPSI_VOLE_INTEGRATION.md` written. Concrete integration plan for the upstream VOLE-PSI swap, including the name-collision resolution (rename local Simple-Hash classes), expected upstream API, parallel-vs-cascade tradeoffs, 6-subtask checklist, effort estimate.
+
+### Genuinely still remaining (cannot finish without external blockers)
+- **CRITICAL — OSN shuffles ONE party's input, not the cascade's XOR-shared `(M⊕R)`.** Reverse-engineered from `osn/OSNSender.cpp` and confirmed via `tests/unit/test_osn_semantics`. The actual contract is:
+  1. `OSNSender::init_wj(size, ot_type, cache, &i2loc)` picks its OWN random destination permutation `dest` via Fisher-Yates and bakes Benes switches for it. The caller cannot pass in a `pi`. `setPi` and `getmyPi` are just metadata — they don't affect routing.
+  2. After `init_wj`, the map `i2loc` is populated such that `i2loc[dest[i]] = i` for all `i` (i.e. `i2loc` is `dest^{-1}`).
+  3. After `OSNReceiver::run_osn(M, chl, output_masks)` + `OSNSender::run_osn(chl, input_vec)`:
+     **`input_vec[j] XOR output_masks[j] == M[dest[j]]`** for all `j`.
+     Equivalently, M's input position `i` ends up at output position `i2loc[i]`.
+  4. The cascade in `MpShuffleDriver` assumed `newR[j] XOR newM[j] == pi(M[j] XOR R[j])` — which conflates the receiver-only-input shuffle with a shared shuffle. **Wrong by design.** The OSN gives us `pi_k(M_k)` but not `pi_k(R_k)`. To get the joint `pi_k(M_k) XOR pi_k(R_k)` we would need either (a) two OSN calls per round with the same baked permutation (load via `osn_cache`), or (b) reconstruct the table at SP between rounds (defeats privacy), or (c) switch to a true secret-shared shuffle primitive (Chase-Ghosh-Poburinnaya Asiacrypt'20 SSS, which is what `docs/MALICIOUS_UPGRADE_ROADMAP.md` Path B targets).
+  5. **Recommended next step:** option (a) — two OSN calls per round sharing a cached Benes routing. Effort: ~1 day to refactor + add tests once the design is sketched. This keeps Benes performance, requires no new crypto.
+  6. The OSN itself is correct and usable; the issue was in the cascade's assumption about what it provides.
+- **HIGH** RsMpsiVole upstream wiring: needs the upstream `volePSI::RsPsiSender`/`RsPsiReceiver` headers (now confirmed available at `out/install/linux/include/volePSI/`) + the name-collision rename in Option 1 of `RSMPSI_VOLE_INTEGRATION.md`. 2-3 days of focused work.
+- **HIGH** Malicious-secure shuffle (RSS-3PC for N=3, CGP chain for N≥4): see `MALICIOUS_UPGRADE_ROADMAP.md`. 2-3 weeks (Path A) to 4-6 weeks (Path B) of cryptographer-engineer time with the papers in hand. The OSN-pi finding above strengthens the case for picking up a separate shuffle primitive entirely rather than salvaging the cascade-OSN path.
+
+## Round 10 — build session results
+
+Successful first end-to-end build on Ubuntu 24.04, libsodium 1.0.18 (system) + auto-fetched coproto/libOTe/macoro/Boost 1.86.0/bitpolymul. Real bugs caught + fixed:
+
+### Closed (this commit)
+- **build** `co_await sock.recv(span)` returns `void`, not a size; coproto throws on EOF. Replaced multi-iteration `recvExact`/`sendExact` helpers with single-shot calls in MpStarChannel and MpShuffleDriver. **Real bug; my prototype's loop pattern was wrong.**
+- **build** `RandomOracle::Final(ptr, size)` doesn't exist; the size is fixed at construction. Use `Final(ptr)`. Fixed in MpStarSetup.
+- **build** `oc::block` requires `cryptoTools/Common/Defines.h` (which defines `namespace oc = osuCrypto`); `block.h` alone is not enough. Fixed in MpStarCrypto.h and MpShuffleDriver.h.
+- **build** `OSNSender`/`OSNReceiver` are in the global namespace (their headers do `using namespace volePSI;` at file scope — questionable practice but real). My `volePSI::OSNSender` qualified references didn't link. Removed the `volePSI::` qualifier in MpShuffleDriver and test_osn_semantics.
+- **build** `OSNSender::init(size, ot_type, ...)` is **declared but not implemented**; only `init_wj(size, ot_type, cache, i2loc_map)` is defined. Switched to `init_wj` with an identity `i2loc` map. Fixed in MpShuffleDriver and test_osn_semantics.
+- **build** `OSNReceiver::init` is documented as `init(size, ot_type = 0)` but the existing code always passes `ot_type=1`. Default-zero may or may not work; matched existing convention.
+- **wire** `coproto::LocalAsyncSocket::makePair()` confirmed as the in-process socket-pair API. `test_osn_semantics` now uses it for real.
+
+### Test results
+- `test_mpstar_crypto`: 9/9 PASS
+- `test_kdf`: 6/6 PASS
+- `test_osn_semantics`: FAIL — surfaced the CRITICAL OSN-pi finding documented above. This is the test working as designed.
+- `frontend -mpsa -h`: prints clean usage; CLI parses correctly.

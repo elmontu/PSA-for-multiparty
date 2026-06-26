@@ -16,6 +16,7 @@ namespace volePSI {
 //   -in <path>             input CSV when -r 1
 //   -out <path>            output CSV when -r 0
 //   -port <basePort>       SP listens on basePort+i for sender i (default: 17500)
+//   -host <spHost>         hostname senders dial SP at (default: localhost)
 void doFileMpsa(osuCrypto::CLP& cmd);
 
 } // namespace volePSI

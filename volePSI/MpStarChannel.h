@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <queue>
@@ -29,8 +30,15 @@ public:
     // Factory for the star point
     static MpStarChannel makeSp(std::vector<coproto::Socket> senderSocks);
 
-    // SP main loop (never returns)
+    // SP main loop. Runs until requestStop() is called (or every sender
+    // socket has errored). Safe to call concurrently with sendTo/recvFrom
+    // on sender instances elsewhere.
     macoro::task<> relayLoop();
+
+    // Request a clean shutdown of relayLoop. Producer and consumer tasks
+    // each wake from their next blocking call (or socket-close), check the
+    // flag, and exit. Idempotent.
+    void requestStop();
 
 private:
     explicit MpStarChannel(std::vector<coproto::Socket> senderSocks);
@@ -40,6 +48,7 @@ private:
     uint32_t mSenderCount = 0;
     coproto::Socket mSpSock;                     // used by sender
     std::vector<coproto::Socket> mSenderSocks;   // used by SP
+    std::atomic<bool> mStop{false};              // SP only; signal relayLoop
 
     // sender-side receive buffer + per-source limits
     static constexpr uint32_t kMaxBufferedFrames = 1024;

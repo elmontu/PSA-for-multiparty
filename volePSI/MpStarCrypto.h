@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include <array>
-#include "cryptoTools/Common/block.h"
+#include "cryptoTools/Common/Defines.h"
 
 namespace volePSI {
 namespace mpstar {

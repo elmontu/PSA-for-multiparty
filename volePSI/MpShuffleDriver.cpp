@@ -1,11 +1,13 @@
 #include "MpShuffleDriver.h"
 #include "MpStarChannel.h"
 #include "MpStarSetup.h"
+#include "MpStarCrypto.h"
 #include "osn/OSNSender.h"
 #include "osn/OSNReceiver.h"
 #include "cryptoTools/Crypto/PRNG.h"
 #include <sodium.h>
 #include <cstring>
+#include <map>
 #include <random>
 #include <algorithm>
 #include <numeric>
@@ -63,15 +65,44 @@ macoro::task<std::vector<oc::block>> recvBlocksOnSocket(coproto::Socket& sock, s
 {
     const std::size_t total = count * kBlockSize;
     std::vector<uint8_t> buf(total);
-    std::size_t got = 0;
-    while (got < total) {
-        auto span = coproto::span<uint8_t>(buf.data() + got, total - got);
-        auto n = co_await sock.recv(span);
-        if (n == 0)
-            throw std::runtime_error("MpShuffleDriver: connection closed mid-recv");
-        got += n;
-    }
+    co_await sock.recv(coproto::span<uint8_t>(buf.data(), buf.size()));
     co_return deserializeBlocks(buf, count);
+}
+
+// AEAD-wrap blocks under the SP key and send length-prefixed ciphertext.
+macoro::task<void> sendBlocksAead(coproto::Socket& sock,
+                                  std::vector<oc::block> blocks,
+                                  const std::array<uint8_t, 32>& key)
+{
+    auto plain = volePSI::mpstar::serializeBlocks(blocks);
+    auto ct = volePSI::mpstar::aeadEncrypt(plain, key);
+    uint32_t len = static_cast<uint32_t>(ct.size());
+    std::array<uint8_t, 4> hdr;
+    hdr[0] = static_cast<uint8_t>(len >> 24);
+    hdr[1] = static_cast<uint8_t>(len >> 16);
+    hdr[2] = static_cast<uint8_t>(len >> 8);
+    hdr[3] = static_cast<uint8_t>(len);
+    co_await sock.send(coproto::span<const uint8_t>(hdr.data(), hdr.size()));
+    co_await sock.send(std::move(ct));
+}
+
+macoro::task<std::vector<oc::block>> recvBlocksAead(coproto::Socket& sock,
+                                                    size_t count,
+                                                    const std::array<uint8_t, 32>& key)
+{
+    std::array<uint8_t, 4> hdr;
+    co_await sock.recv(coproto::span<uint8_t>(hdr.data(), hdr.size()));
+
+    uint32_t len = (uint32_t(hdr[0]) << 24) | (uint32_t(hdr[1]) << 16)
+                 | (uint32_t(hdr[2]) << 8)  |  uint32_t(hdr[3]);
+    if (len > 64ULL * 1024 * 1024) {
+        throw std::runtime_error("MpShuffleDriver: AEAD payload exceeds limit");
+    }
+    std::vector<uint8_t> ct(len);
+    co_await sock.recv(coproto::span<uint8_t>(ct.data(), ct.size()));
+
+    auto plain = volePSI::mpstar::aeadDecrypt(ct, key);
+    co_return volePSI::mpstar::deserializeBlocks(plain, count);
 }
 
 } // anonymous namespace
@@ -83,7 +114,8 @@ macoro::task<std::vector<oc::block>> MpShuffleDriver::runSender(
     uint32_t senderCount,
     uint64_t C,
     std::vector<oc::block> ownMasks,
-    coproto::Socket& myOsnSocket)
+    coproto::Socket& myOsnSocket,
+    const std::array<uint8_t, 32>& spKey)
 {
     if (senderCount < 2)
         throw std::runtime_error("MpShuffleDriver::runSender: senderCount must be >= 2");
@@ -97,7 +129,15 @@ macoro::task<std::vector<oc::block>> MpShuffleDriver::runSender(
             auto pi = randomPermutation(c);
 
             OSNSender osnS;
-            osnS.init(c);
+            // OSNSender::init is declared-only; init_wj is the actually-defined
+            // initializer in osn/OSNSender.cpp. We pass an identity i2loc map
+            // since the cascade shuffles C blocks without an intersection
+            // structure, so position-i in the OSN corresponds to row-i.
+            std::map<int, int> i2loc;
+            for (size_t k = 0; k < c; ++k) {
+                i2loc[static_cast<int>(k)] = static_cast<int>(k);
+            }
+            osnS.init_wj(c, 1, "", i2loc);
             osnS.setPi(std::move(pi));
 
             // R is in/out: after run_osn, R holds sender's new share = pi(R) XOR correlation.
@@ -130,8 +170,9 @@ macoro::task<std::vector<oc::block>> MpShuffleDriver::runSender(
             msg.insert(msg.end(), cipher.begin(), cipher.end());
             co_await chan.sendTo(k + 1, std::move(msg));
 
-            // Send rho cleartext to SP via the OSN socket.
-            co_await sendBlocksOnSocket(myOsnSocket, rho);
+            // Send rho to SP via the OSN socket, AEAD-wrapped under the
+            // session-bound SP key. SP rejects any forged/tampered rho.
+            co_await sendBlocksAead(myOsnSocket, rho, spKey);
 
             R.clear();
             break; // this sender has no further role until final reveal (only the LAST sender does that)
@@ -157,9 +198,9 @@ macoro::task<std::vector<oc::block>> MpShuffleDriver::runSender(
         // else: idle this round
     }
 
-    // Final reveal: the last sender ships its R to SP.
+    // Final reveal: the last sender ships its R to SP, AEAD-wrapped.
     if (selfIdx == senderCount - 1) {
-        co_await sendBlocksOnSocket(myOsnSocket, R);
+        co_await sendBlocksAead(myOsnSocket, R, spKey);
     }
 
     co_return R;
@@ -170,12 +211,15 @@ macoro::task<std::vector<oc::block>> MpShuffleDriver::runSp(
     std::vector<coproto::Socket>& osnSocksPerRound,
     uint32_t senderCount,
     uint64_t C,
-    std::vector<oc::block> initialMasked)
+    std::vector<oc::block> initialMasked,
+    const std::vector<std::array<uint8_t, 32>>& spKeys)
 {
     if (senderCount < 2)
         throw std::runtime_error("MpShuffleDriver::runSp: senderCount must be >= 2");
     if (osnSocksPerRound.size() != senderCount - 1)
         throw std::runtime_error("MpShuffleDriver::runSp: osnSocksPerRound size mismatch");
+    if (spKeys.size() != senderCount)
+        throw std::runtime_error("MpShuffleDriver::runSp: spKeys size mismatch");
 
     std::vector<oc::block> M = std::move(initialMasked);
     const size_t c = static_cast<size_t>(C);
@@ -184,7 +228,7 @@ macoro::task<std::vector<oc::block>> MpShuffleDriver::runSp(
 
     for (size_t k = 0; k < senderCount - 1u; ++k) {
         OSNReceiver osnR;
-        osnR.init(c);
+        osnR.init(c, 1);
 
         std::vector<oc::block> newM;
         co_await osnR.run_osn(oc::span<oc::block>(M.data(), M.size()),
@@ -192,8 +236,9 @@ macoro::task<std::vector<oc::block>> MpShuffleDriver::runSp(
         if (newM.size() != c)
             throw std::runtime_error("MpShuffleDriver: OSN receiver returned wrong size");
 
-        // Receive rho from sender k.
-        auto rho = co_await recvBlocksOnSocket(osnSocksPerRound[k], c);
+        // Receive rho from sender k AEAD-verified under their SP key.
+        // Tampered/forged rho throws here.
+        auto rho = co_await recvBlocksAead(osnSocksPerRound[k], c, spKeys[k]);
 
         // M_{k+1} = newM XOR rho.
         for (size_t i = 0; i < c; ++i)
@@ -202,8 +247,10 @@ macoro::task<std::vector<oc::block>> MpShuffleDriver::runSp(
         M = std::move(newM);
     }
 
-    // Final reveal: receive R from the last sender on the last socket.
-    auto finalR = co_await recvBlocksOnSocket(osnSocksPerRound.back(), c);
+    // Final reveal: receive R from the last sender on the last socket,
+    // AEAD-verified under that sender's SP key.
+    auto finalR = co_await recvBlocksAead(osnSocksPerRound.back(), c,
+                                          spKeys[senderCount - 1]);
 
     std::vector<oc::block> table(c);
     for (size_t i = 0; i < c; ++i)

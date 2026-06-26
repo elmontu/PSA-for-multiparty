@@ -31,6 +31,8 @@
 
 #include <sodium.h>
 #include <fstream>
+#include <iostream>
+#include <ostream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -140,8 +142,7 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
 
     // Drive relayLoop in a worker thread; macoro doesn't expose a when_any
     // that lets us return when shuffle completes while leaving relay live.
-    // The relay sockets get closed by spChan's destructor when this scope
-    // unwinds, which terminates the worker via recv-throwing-EOF.
+    // When shuffle returns we signal spChan.requestStop() and join cleanly.
     std::thread relayThread([&spChan]() {
         try { macoro::sync_wait(spChan.relayLoop()); } catch (...) {}
     });
@@ -149,23 +150,27 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
     // Push the reveal socket onto the OSN-rounds vector since MpShuffleDriver
     // uses osnSocksPerRound.back() for the final reveal.
     osnSocks.push_back(std::move(revealSock));
-    auto shuffled = co_await MpShuffleDriver::runSp(spChan, osnSocks, N, C, std::move(initialMasked));
+    auto shuffled = co_await MpShuffleDriver::runSp(spChan, osnSocks, N, C, std::move(initialMasked), spKeys);
 
-    relayThread.detach();
+    // Clean shutdown of the relay (no more detach + die-on-exit).
+    spChan.requestStop();
+    if (relayThread.joinable()) relayThread.join();
+
     writeBlocksAsHex(outPath, shuffled);
 }
 
-macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort, const std::string& inputPath)
+macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
+                                 const std::string& inputPath, const std::string& spHost)
 {
-    coproto::Socket spSock = senderConnect("localhost", basePort + selfIdx);
+    coproto::Socket spSock = senderConnect(spHost, basePort + selfIdx);
 
     coproto::Socket osnSock;
     if (selfIdx < N - 1) {
-        osnSock = senderConnect("localhost", basePort + N + selfIdx);
+        osnSock = senderConnect(spHost, basePort + N + selfIdx);
     }
     if (selfIdx == N - 1) {
         // SP-side accept on basePort+2*N added in Phase 4 fix.
-        osnSock = senderConnect("localhost", basePort + 2 * N);
+        osnSock = senderConnect(spHost, basePort + 2 * N);
     }
 
     // Receive session_id broadcast by SP. Binds all this-session AEAD to
@@ -237,13 +242,45 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort, con
         ownMasks = std::vector<block>(C, ZeroBlock);
     }
 
-    co_await MpShuffleDriver::runSender(chan, setup, selfIdx, N, C, std::move(ownMasks), osnSock);
+    co_await MpShuffleDriver::runSender(chan, setup, selfIdx, N, C, std::move(ownMasks), osnSock, spKey);
 }
 
 } // anonymous namespace
 
+static void printMpsaUsage(std::ostream& os)
+{
+    os <<
+        "MPSA mode (N-party Private Set Alignment)\n"
+        "\n"
+        "Usage:\n"
+        "  frontend -mpsa -N <senderCount> -r <role> [options]\n"
+        "\n"
+        "Role 0 (Service Provider):\n"
+        "  frontend -mpsa -N <N> -r 0 [-port <basePort>] [-out <csv>]\n"
+        "    -port      SP listens on basePort..basePort+2N (default 17500)\n"
+        "    -out       Output CSV path (default out_cleartext.csv)\n"
+        "\n"
+        "Role 1 (Sender i):\n"
+        "  frontend -mpsa -N <N> -r 1 -i <senderIdx> -in <csv> [-port <p>] [-host <h>]\n"
+        "    -i         Sender index in [0, N)\n"
+        "    -in        Input CSV (col 0 = ID, col 1 = payload)\n"
+        "    -port      Base port to dial SP (default 17500)\n"
+        "    -host      SP hostname (default localhost)\n"
+        "\n"
+        "Examples:\n"
+        "  frontend -mpsa -N 3 -r 0\n"
+        "  frontend -mpsa -N 3 -r 1 -i 0 -in dataset/sender_0.csv\n"
+        "\n"
+        "See README.md and docs/RESEARCH_MPSI.md for protocol details.\n";
+}
+
 void doFileMpsa(CLP& cmd)
 {
+    if (cmd.isSet("h") || cmd.isSet("help")) {
+        printMpsaUsage(std::cout);
+        return;
+    }
+
     if (sodium_init() < 0) {
         throw std::runtime_error("MpsaDriver: sodium_init failed");
     }
@@ -251,6 +288,20 @@ void doFileMpsa(CLP& cmd)
     uint32_t N    = cmd.getOr<uint32_t>("N", 3);
     int role      = cmd.getOr<int>("r", 0);
     int basePort  = cmd.getOr<int>("port", 17500);
+    std::string spHost = cmd.getOr<std::string>("host", "localhost");
+
+    if (N < 2) {
+        printMpsaUsage(std::cerr);
+        throw std::runtime_error("MpsaDriver: -N must be >= 2");
+    }
+    if (basePort <= 0 || basePort + static_cast<int>(2 * N) > 65535) {
+        printMpsaUsage(std::cerr);
+        throw std::runtime_error("MpsaDriver: -port out of range; must be in [1, 65535-2N]");
+    }
+    if (spHost.empty()) {
+        printMpsaUsage(std::cerr);
+        throw std::runtime_error("MpsaDriver: -host cannot be empty");
+    }
 
     if (role == 0) {
         std::string out = cmd.getOr<std::string>("out", "out_cleartext.csv");
@@ -258,10 +309,14 @@ void doFileMpsa(CLP& cmd)
     } else if (role == 1) {
         uint32_t idx = cmd.getOr<uint32_t>("i", 0);
         std::string in = cmd.getOr<std::string>("in", "");
-        if (in.empty()) throw std::runtime_error("MpsaDriver: -in required for sender");
-        macoro::sync_wait(runSenderRole(N, idx, basePort, in));
+        if (in.empty() || idx >= N) {
+            printMpsaUsage(std::cerr);
+            throw std::runtime_error("MpsaDriver: sender requires -in <csv> and -i in [0, N)");
+        }
+        macoro::sync_wait(runSenderRole(N, idx, basePort, in, spHost));
     } else {
-        throw std::runtime_error("MpsaDriver: invalid -r role (0=SP, 1=sender)");
+        printMpsaUsage(std::cerr);
+        throw std::runtime_error("MpsaDriver: invalid -r role (use 0 for SP, 1 for sender)");
     }
 }
 

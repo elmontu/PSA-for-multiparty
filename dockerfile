@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     gcc-11 g++-11 \
     python3 python3-pip python3-setuptools \
     wget curl libboost-all-dev libtool \
+    pkg-config libsodium-dev \
     git && rm -rf /var/lib/apt/lists/*
 
 # Set gcc/g++ to version 11
