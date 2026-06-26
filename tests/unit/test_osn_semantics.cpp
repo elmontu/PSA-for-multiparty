@@ -116,6 +116,24 @@ int main() {
 
     std::vector<oc::block> newR, newM;
 
+    // First: smoke check that the new seeded init produces different dest
+    // for different seeds. Two i2loc maps from two different seeds.
+    {
+        OSNSender s1, s2;
+        std::map<int, int> map1, map2;
+        oc::block seed1, seed2;
+        std::memset(&seed1, 0xAA, sizeof(seed1));
+        std::memset(&seed2, 0x55, sizeof(seed2));
+        s1.init_wj_seeded(C, 1, "", map1, seed1);
+        s2.init_wj_seeded(C, 1, "", map2, seed2);
+        bool different = false;
+        for (size_t k = 0; k < C; ++k) {
+            if (map1[k] != map2[k]) { different = true; break; }
+        }
+        std::cout << "Seeded init produces distinct permutations: "
+                  << (different ? "YES" : "NO (something is wrong)") << "\n";
+    }
+
     std::map<int, int> i2loc;
     std::thread senderThread([&]() {
         try {

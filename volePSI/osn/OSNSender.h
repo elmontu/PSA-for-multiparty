@@ -41,6 +41,13 @@ public:
 	OSNSender(size_t size = 0, int ot_type = 0);
 	void init(size_t size, int ot_type = 0, const std::string &osn_cache = "", const std::vector<uint64_t> intersection = {});
 	void init_wj(size_t size, int ot_type, const std::string &osn_cache, std::map<int, int> &i2locptr);
+	// Same as init_wj but seeds the Fisher-Yates PRNG explicitly. Required
+	// for any multi-round shuffle protocol that needs different
+	// permutations across rounds (init_wj uses a hardcoded seed, so all
+	// invocations at the same size produce the same dest). Caller must
+	// agree on the seed with the OSNReceiver counterpart out of band.
+	void init_wj_seeded(size_t size, int ot_type, const std::string &osn_cache,
+	                    std::map<int, int> &i2locptr, oc::block seed);
 	std::vector<int> getmyPi(const std::map<int, int> &i2loc, const std::vector<u64> &intersection);
 	std::vector<int> getPi() { return mPi; }
 	void setPi(std::vector<int> myPi) { mPi = myPi; }

@@ -186,6 +186,51 @@ void OSNSender::init_wj(size_t size, int ot_type, const std::string &osn_cache, 
 	}
 }
 
+// Seeded variant of init_wj — same logic, caller-supplied PRNG seed instead
+// of the hardcoded `_mm_set_epi32(4253233465, 334565, 0, 235)`. Required
+// for any protocol that needs distinct permutations across calls at the
+// same size (e.g., MpShuffleDriver's per-round shuffles).
+void OSNSender::init_wj_seeded(size_t size, int ot_type, const std::string &osn_cache,
+                                std::map<int, int> &i2locptr, oc::block seed)
+{
+	this->size = size;
+	this->ot_type = ot_type;
+
+	int values = size;
+	int N = int(ceil(log2(values)));
+	int levels = 2 * N - 1;
+	dest.resize(size);
+	benes.initialize(values, levels);
+	std::vector<int> src(values);
+
+	for (auto i = 0u; i < src.size(); ++i)
+		src[i] = dest[i] = i;
+
+	osuCrypto::PRNG prng(seed);
+
+	for (int i = size - 1; i > 0; i--)
+	{
+		int loc = prng.get<uint64_t>() % (i + 1);
+		std::swap(dest[i], dest[loc]);
+		(i2locptr).insert({dest[i], i});
+	}
+	(i2locptr).insert({dest[0], 0});
+
+	if (osn_cache != "")
+	{
+		string file = "./benes/" + osn_cache + "_" + to_string(size);
+		if (!benes.load(file))
+		{
+			benes.gen_benes_route(N, 0, 0, src, dest);
+			benes.dump(file);
+		}
+	}
+	else
+	{
+		benes.gen_benes_route(N, 0, 0, src, dest);
+	}
+}
+
 // WJ: test performance of osn unit
 std::vector<int> OSNSender::getmyPi(const std::map<int, int> &i2loc, const std::vector<u64> &intersection)
 {

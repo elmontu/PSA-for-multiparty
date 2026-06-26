@@ -121,14 +121,30 @@ This sub-step is **scaffolding, not production code**. It will not compile or ru
 
 ### Genuinely still remaining (cannot finish without external blockers)
 - **CRITICAL — OSN shuffles ONE party's input, not the cascade's XOR-shared `(M⊕R)`.** Reverse-engineered from `osn/OSNSender.cpp` and confirmed via `tests/unit/test_osn_semantics`. The actual contract is:
-  1. `OSNSender::init_wj(size, ot_type, cache, &i2loc)` picks its OWN random destination permutation `dest` via Fisher-Yates and bakes Benes switches for it. The caller cannot pass in a `pi`. `setPi` and `getmyPi` are just metadata — they don't affect routing.
+  1. `OSNSender::init_wj(size, ot_type, cache, &i2loc)` picks its OWN destination permutation `dest` via Fisher-Yates and bakes Benes switches for it. The caller cannot pass in a `pi`. `setPi` and `getmyPi` are just metadata — they don't affect routing.
   2. After `init_wj`, the map `i2loc` is populated such that `i2loc[dest[i]] = i` for all `i` (i.e. `i2loc` is `dest^{-1}`).
   3. After `OSNReceiver::run_osn(M, chl, output_masks)` + `OSNSender::run_osn(chl, input_vec)`:
      **`input_vec[j] XOR output_masks[j] == M[dest[j]]`** for all `j`.
      Equivalently, M's input position `i` ends up at output position `i2loc[i]`.
-  4. The cascade in `MpShuffleDriver` assumed `newR[j] XOR newM[j] == pi(M[j] XOR R[j])` — which conflates the receiver-only-input shuffle with a shared shuffle. **Wrong by design.** The OSN gives us `pi_k(M_k)` but not `pi_k(R_k)`. To get the joint `pi_k(M_k) XOR pi_k(R_k)` we would need either (a) two OSN calls per round with the same baked permutation (load via `osn_cache`), or (b) reconstruct the table at SP between rounds (defeats privacy), or (c) switch to a true secret-shared shuffle primitive (Chase-Ghosh-Poburinnaya Asiacrypt'20 SSS, which is what `docs/MALICIOUS_UPGRADE_ROADMAP.md` Path B targets).
-  5. **Recommended next step:** option (a) — two OSN calls per round sharing a cached Benes routing. Effort: ~1 day to refactor + add tests once the design is sketched. This keeps Benes performance, requires no new crypto.
-  6. The OSN itself is correct and usable; the issue was in the cascade's assumption about what it provides.
+  4. The cascade in `MpShuffleDriver` assumed `newR[j] XOR newM[j] == pi(M[j] XOR R[j])` — which conflates the receiver-only-input shuffle with a shared shuffle. **Wrong by design.** The OSN gives us `pi_k(M_k)` but not `pi_k(R_k)`.
+
+- **CRITICAL #2 — `init_wj`'s PRNG seed is HARDCODED** (`osn/OSNSender.cpp:160`):
+  ```cpp
+  osuCrypto::PRNG prng(_mm_set_epi32(4253233465, 334565, 0, 235)); // we need to modify this seed
+  ```
+  The author's own comment acknowledges the deficiency. The Fisher-Yates that produces `dest` always consumes from a fixed seed; therefore **every call to `init_wj(size, ...)` with the same `size` produces the same `dest`**. Confirmed by two back-to-back runs of `test_osn_semantics`: identical i2loc both times. Implications:
+  - All N-1 cascade rounds would compose the SAME permutation — defeating the purpose of having N-1 rounds.
+  - Even a single shuffle is publicly predictable: anyone with the seed can compute `dest` offline and de-anonymize the output.
+  - In the original 2-party PSA, this happens not to be a privacy issue *because* the same dest gets applied once per protocol invocation and the shared output is XOR-secret anyway. But the moment you compose multiple OSN calls, the determinism shows up as broken security.
+
+- **Combined implication:** the existing OSN in this codebase is **unusable as-is** for any multi-round shuffle protocol, including the MpShuffleDriver cascade. Fix paths:
+  - **(P)** Fork `osn/OSNSender.cpp` to accept a seed parameter on `init_wj`. **DONE** — added `OSNSender::init_wj_seeded(size, ot_type, cache, &i2loc, seed)`. Verified via `test_osn_semantics`: different seeds → different permutations. The cascade can now derive a per-round seed from the session-bound pairwise key (e.g. `deriveSessionKey(setup.key(k), sessionId, "shuffle_round_k")` repurposed). Still needed: wire it into MpShuffleDriver.
+  - **(Q)** Use the OSN only ONCE end-to-end (no cascade). Limits protocol to N=2-party-style alignment; loses the multi-party privacy benefit.
+  - **(R)** Switch to Chase-Ghosh-Poburinnaya Secret-Shared Shuffle (Asiacrypt'20). The right primitive for shared inputs; comes with proper per-call randomness. Multi-week, also addresses the malicious-shuffle roadmap. See `docs/MALICIOUS_UPGRADE_ROADMAP.md` Path B.
+
+- **Remaining cascade gap (after fix P):** the OSN still only shuffles the receiver's input (`M_k`), not the shared `(M_k XOR R_k)`. The cascade needs either:
+  - **(P+two-OSN)** Two OSN calls per round with roles swapped, BOTH using the same seeded routing (so both calls apply the same `dest_k`). First call: SP-receiver provides M_k, sender k = OSN sender. Second call: sender k = receiver provides R_k, SP = OSN sender. Both calls use `init_wj_seeded(..., seed_k)` so `dest_k` is the same in both. Result invariant after both: `(M_{k+1} XOR R_{k+1}) = dest_k(M_k XOR R_k)`. ~150 LoC refactor in MpShuffleDriver plus the seed-agreement plumbing.
+  - **(R)** Same as above — the proper long-term primitive is CGP.
 - **HIGH** RsMpsiVole upstream wiring: needs the upstream `volePSI::RsPsiSender`/`RsPsiReceiver` headers (now confirmed available at `out/install/linux/include/volePSI/`) + the name-collision rename in Option 1 of `RSMPSI_VOLE_INTEGRATION.md`. 2-3 days of focused work.
 - **HIGH** Malicious-secure shuffle (RSS-3PC for N=3, CGP chain for N≥4): see `MALICIOUS_UPGRADE_ROADMAP.md`. 2-3 weeks (Path A) to 4-6 weeks (Path B) of cryptographer-engineer time with the papers in hand. The OSN-pi finding above strengthens the case for picking up a separate shuffle primitive entirely rather than salvaging the cascade-OSN path.
 
