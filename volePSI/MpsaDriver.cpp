@@ -59,11 +59,20 @@ std::pair<std::vector<block>, std::vector<block>> parseCsv(const std::string& pa
     return {std::move(data[0]), std::move(data[1])};
 }
 
-void writeBlocksAsHex(const std::string& path, const std::vector<block>& data)
+// Write N parallel shuffled columns as a CSV: each row is N comma-separated
+// hex-encoded 16-byte blocks (one per sender's payload at that intersection
+// row, all permuted by the same secret pi).
+void writeColumnsAsCsv(const std::string& path,
+                       const std::vector<std::vector<block>>& columns,
+                       uint64_t C)
 {
     std::ofstream out(path);
-    for (const auto& b : data) {
-        out << b << "\n";
+    for (uint64_t i = 0; i < C; ++i) {
+        for (size_t c = 0; c < columns.size(); ++c) {
+            if (c > 0) out << ",";
+            out << columns[c][i];
+        }
+        out << "\n";
     }
 }
 
@@ -143,21 +152,19 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
     uint64_t C = co_await mpsi.runIntersection(senderSocks, N, perSenderSetSize);
     LOG << "[SP] MPSI done; C=" << C << "\n";
 
-    // Receive AEAD-wrapped masked columns m_i. coproto::Socket::recv into a
-    // std::vector does NOT auto-resize; length is sent separately first.
-    std::vector<block> initialMasked(C, ZeroBlock);
+    // Receive AEAD-wrapped masked columns m_i. SP keeps each sender's
+    // column SEPARATELY (no XOR-aggregation) so it can shuffle N parallel
+    // streams. initialMasked[c] is sender c's column.
+    std::vector<std::vector<block>> initialMasked(N);
     for (uint32_t i = 0; i < N; ++i) {
         uint64_t ctLen = 0;
         co_await senderSocks[i].recv(ctLen);
         std::vector<uint8_t> ct(ctLen);
         co_await senderSocks[i].recv(ct);
         auto plain = volePSI::mpstar::aeadDecrypt(ct, spKeys[i]);
-        auto m_i = volePSI::mpstar::deserializeBlocks(plain, C);
-        for (uint64_t j = 0; j < C; ++j) {
-            initialMasked[j] = initialMasked[j] ^ m_i[j];
-        }
+        initialMasked[i] = volePSI::mpstar::deserializeBlocks(plain, C);
     }
-    LOG << "[SP] masked columns aggregated\n";
+    LOG << "[SP] N masked columns received\n";
 
     // Senders talk to each other directly via the peer mesh; SP only
     // orchestrates the OSN cascade. No MpStarChannel needed on the SP side.
@@ -172,7 +179,7 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
     for (auto& sock : osnSocksB) co_await sock.flush();
     co_await revealSock.flush();
 
-    writeBlocksAsHex(outPath, shuffled);
+    writeColumnsAsCsv(outPath, shuffled, C);
 }
 
 macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
@@ -286,31 +293,34 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
     auto setup = co_await MpStarSetup::runSender(chan, selfIdx, N);
     LOG << "[S" << selfIdx << "] MpStarSetup done\n";
 
-    // Phase 0: sender 0 collects every other sender's r_i (encrypted under
-    // session-bound pairwise key); other senders ship r_i to sender 0.
+    // Phase 0 (N-column variant): sender 0 collects every other sender j's
+    // r_j (encrypted) and stores them PER-COLUMN — ownMasks[j] = r_j.
+    // Sender 0's own column: ownMasks[0] = r_i. Other senders ship r_i to
+    // sender 0 and hold zero-mask columns themselves.
     using volePSI::mpstar::serializeBlocks;
     using volePSI::mpstar::deserializeBlocks;
     using volePSI::mpstar::aeadEncrypt;
     using volePSI::mpstar::aeadDecrypt;
     using volePSI::mpstar::deriveSessionKey;
 
-    std::vector<block> ownMasks;
+    std::vector<std::vector<block>> ownMasks(N);
     if (selfIdx == 0) {
-        ownMasks = r_i;
+        ownMasks[0] = r_i;  // sender 0's own mask
         for (uint32_t j = 1; j < N; ++j) {
             auto sessionKey = deriveSessionKey(setup.key(j), sessionId, "pair_session");
             auto ct    = co_await chan.recvFrom(j);
             auto plain = aeadDecrypt(ct, sessionKey);
-            auto r_j   = deserializeBlocks(plain, C);
-            for (uint64_t b = 0; b < C; ++b)
-                ownMasks[b] = ownMasks[b] ^ r_j[b];
+            ownMasks[j] = deserializeBlocks(plain, C);
         }
     } else {
         auto sessionKey = deriveSessionKey(setup.key(0), sessionId, "pair_session");
         auto plain = serializeBlocks(r_i);
         auto ct    = aeadEncrypt(plain, sessionKey);
         co_await chan.sendTo(0, std::move(ct));
-        ownMasks = std::vector<block>(C, ZeroBlock);
+        // Other senders hold zero per-column masks initially.
+        for (uint32_t c = 0; c < N; ++c) {
+            ownMasks[c] = std::vector<block>(C, ZeroBlock);
+        }
     }
 
     co_await MpShuffleDriver::runSender(

@@ -164,9 +164,20 @@ Canonical pair iteration avoids the obvious deadlock at peer-setup time (every s
 - Removed bisection cerrs from `MpStarSetup` and `RsMpsi`.
 - Updated `MpsaDriver.cpp` file header to document the peer-mesh design.
 
-## What's still genuinely open (post-Round 14)
+## Round 15 — N-column joined-table output (DONE)
 
-- **Output format is XOR-aggregated**, not an N-column joined table. The cryptographic mechanism (intersection + shuffle + AEAD) is correct end-to-end; what's missing is a Phase 0 design that keeps each sender's payload in a separate column. ~1 round of design work: either run the cascade N times in parallel under the same seeded permutations (cost: linear in N), or use a wider payload block layout. Either is straightforward now that the underlying primitives work.
+Phase 0 + cascade redesigned to keep each sender's payload in its own column throughout the protocol:
+- SP receives N separate masked columns `M[c] = c_c XOR r_c` (no XOR-aggregation across senders).
+- Sender 0's Phase 0 aggregation stores `ownMasks[c] = r_c` per column instead of XOR-summing.
+- MpShuffleDriver cascade runs N parallel `(M[c], R[c])` pairs per round, each shuffled with two OSN calls sharing the SAME `init_wj_seeded` seed → same `dest_k` permutation applied to all columns within a round.
+- Output CSV: each row has N comma-separated hex-encoded 16-byte blocks (one per sender's payload at that intersection row).
+
+Verified: `./tests/run_mpsa_smoke.sh` PASS. First output row decodes as `(val0_44, val1_44, val2_44)` — sender 0/1/2 payloads at intersection row 44, all permuted by the same secret π.
+
+Communication cost is N× the previous single-column protocol (linear in N as expected).
+
+## What's still genuinely open (post-Round 15)
+
 - **RsMpsiVole upstream wiring** — still scaffolded; needs Zhang ePrint 2023/1690 or KMPRT real implementation.
 - **Malicious-secure shuffle** — research-grade, see `docs/MALICIOUS_UPGRADE_ROADMAP.md`.
 - **HIGH** RsMpsiVole upstream wiring: needs the upstream `volePSI::RsPsiSender`/`RsPsiReceiver` headers (now confirmed available at `out/install/linux/include/volePSI/`) + the name-collision rename in Option 1 of `RSMPSI_VOLE_INTEGRATION.md`. 2-3 days of focused work.
