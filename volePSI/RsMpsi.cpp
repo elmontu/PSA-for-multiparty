@@ -1,5 +1,6 @@
 #include "RsMpsi.h"
 
+#include <iostream>
 #include <unordered_map>
 #include <unordered_set>
 #include <stdexcept>
@@ -23,7 +24,7 @@ macoro::task<std::vector<uint8_t>>
 RsMpsi3rdPSender::runIntersection(
     oc::span<block> inputs,
     coproto::Socket& spChl,
-    uint32_t /*selfIdx*/,
+    uint32_t selfIdx,
     uint32_t /*senderCount*/)
 {
     setTimePoint("SENDER : intersection begin");
@@ -38,11 +39,14 @@ RsMpsi3rdPSender::runIntersection(
     co_await spChl.send(oc::span<block>(hashed));
 
     setTimePoint("SENDER : hashes sent");
+    std::cerr << "[MPSI-S" << selfIdx << "] hashes sent; recv card\n";
 
     co_await spChl.recv(mCardinality);
+    std::cerr << "[MPSI-S" << selfIdx << "] card=" << mCardinality << "; recv bitvec\n";
 
-    std::vector<uint8_t> bitvec;
+    std::vector<uint8_t> bitvec(inputs.size());
     co_await spChl.recv(bitvec);
+    std::cerr << "[MPSI-S" << selfIdx << "] bitvec recv done (" << bitvec.size() << ")\n";
 
     setTimePoint("SENDER : intersection bitvec recv");
     co_return bitvec;
@@ -113,9 +117,11 @@ RsMpsi3rdPReceiver::runIntersection(
 
     // Ship cardinality + bitvec back to each sender.
     for (uint32_t i = 0; i < senderCount; ++i) {
+        std::cerr << "[MPSI-SP] send card+bitvec to sender " << i << " (bv size " << mPerSenderBitvecs[i].size() << ")\n";
         co_await senderSocks[i].send(mCardinality);
         co_await senderSocks[i].send(mPerSenderBitvecs[i]);
     }
+    std::cerr << "[MPSI-SP] all card+bitvec sent\n";
 
     setTimePoint("SP : bitvecs sent");
     co_return mCardinality;

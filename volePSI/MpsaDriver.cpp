@@ -96,26 +96,24 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
     //   basePort + N + 2k + 1  (k = 0..N-2): OSN call B socket with sender k
     //   basePort + N + 2*(N-1): reveal socket from last sender
     // Total ports used: 3N - 1.
+    std::cerr << "[SP] accepting sender sockets...\n";
     std::vector<coproto::Socket> osnSocksA(N - 1), osnSocksB(N - 1);
     for (uint32_t k = 0; k < N - 1; ++k) {
         osnSocksA[k] = spAccept(basePort + N + 2 * k);
         osnSocksB[k] = spAccept(basePort + N + 2 * k + 1);
     }
     coproto::Socket revealSock = spAccept(basePort + N + 2 * (N - 1));
+    std::cerr << "[SP] all " << (3*N - 1) << " sockets accepted\n";
 
-    // SP picks a per-session random ID and broadcasts it. This binds every
-    // AEAD ciphertext in this MPSA invocation to this session, defeating
-    // cross-session replay attacks even when long-term DH keys are reused.
     std::array<uint8_t, 32> sessionId;
     randombytes_buf(sessionId.data(), sessionId.size());
+    std::cerr << "[SP] broadcasting sessionId\n";
     for (uint32_t i = 0; i < N; ++i) {
         co_await senderSocks[i].send(coproto::span<const uint8_t>(sessionId.data(), sessionId.size()));
     }
-
-    // SP↔sender DH first: derives an authentication key per sender. Used
-    // below to AEAD-decrypt the masked-column m_i so a tampering sender or
-    // network attacker is detected before XOR'ing into M_0.
+    std::cerr << "[SP] sessionId broadcast done; running MpSpHandshake\n";
     auto spKeysRaw = co_await MpSpHandshake::runSp(senderSocks);
+    std::cerr << "[SP] MpSpHandshake done\n";
     std::vector<std::array<uint8_t, 32>> spKeys(N);
     for (uint32_t i = 0; i < N; ++i) {
         spKeys[i] = volePSI::mpstar::deriveSessionKey(spKeysRaw[i], sessionId, "sp_session");
@@ -125,16 +123,21 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
     for (uint32_t i = 0; i < N; ++i) {
         co_await senderSocks[i].recv(perSenderSetSize[i]);
     }
+    std::cerr << "[SP] set sizes received\n";
 
     RsMpsi3rdPReceiver mpsi;
     mpsi.init(perSenderSetSize[0], perSenderSetSize[0], 40, sysRandomSeed(), false, 1);
+    std::cerr << "[SP] MPSI starting\n";
     uint64_t C = co_await mpsi.runIntersection(senderSocks, N, perSenderSetSize);
+    std::cerr << "[SP] MPSI done; C=" << C << "\n";
 
-    // Receive AEAD-wrapped masked columns m_i. Decrypt with each sender's
-    // SP key; XOR into M_0. aeadDecrypt throws on MAC mismatch.
+    // Receive AEAD-wrapped masked columns m_i. coproto::Socket::recv into a
+    // std::vector does NOT auto-resize; length is sent separately first.
     std::vector<block> initialMasked(C, ZeroBlock);
     for (uint32_t i = 0; i < N; ++i) {
-        std::vector<uint8_t> ct;
+        uint64_t ctLen = 0;
+        co_await senderSocks[i].recv(ctLen);
+        std::vector<uint8_t> ct(ctLen);
         co_await senderSocks[i].recv(ct);
         auto plain = volePSI::mpstar::aeadDecrypt(ct, spKeys[i]);
         auto m_i = volePSI::mpstar::deserializeBlocks(plain, C);
@@ -142,19 +145,21 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
             initialMasked[j] = initialMasked[j] ^ m_i[j];
         }
     }
+    std::cerr << "[SP] masked columns aggregated\n";
 
+    std::cerr << "[SP] making star channel\n";
     MpStarChannel spChan = MpStarChannel::makeSp(std::move(senderSocks));
 
-    // Drive relayLoop in a worker thread; macoro doesn't expose a when_any
-    // that lets us return when shuffle completes while leaving relay live.
-    // When shuffle returns we signal spChan.requestStop() and join cleanly.
+    std::cerr << "[SP] spawning relay thread\n";
     std::thread relayThread([&spChan]() {
         try { macoro::sync_wait(spChan.relayLoop()); } catch (...) {}
     });
 
+    std::cerr << "[SP] running MpShuffleDriver::runSp\n";
     auto shuffled = co_await MpShuffleDriver::runSp(
         spChan, osnSocksA, osnSocksB, revealSock,
         N, C, std::move(initialMasked), spKeys, sessionId);
+    std::cerr << "[SP] runSp done\n";
 
     // Clean shutdown of the relay (no more detach + die-on-exit).
     spChan.requestStop();
@@ -166,7 +171,9 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
 macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
                                  const std::string& inputPath, const std::string& spHost)
 {
+    std::cerr << "[S" << selfIdx << "] connecting spSock\n";
     coproto::Socket spSock = senderConnect(spHost, basePort + selfIdx);
+    std::cerr << "[S" << selfIdx << "] spSock connected\n";
 
     // Sockets for the two-OSN-per-round cascade design.
     // - Sender k = selfIdx in [0, N-1) connects two OSN sockets to SP
@@ -177,31 +184,39 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
         osnSocketA = senderConnect(spHost, basePort + N + 2 * selfIdx);
         osnSocketB = senderConnect(spHost, basePort + N + 2 * selfIdx + 1);
     } else {
-        // selfIdx == N - 1: only the reveal socket.
         revealSocket = senderConnect(spHost, basePort + N + 2 * (N - 1));
     }
+    std::cerr << "[S" << selfIdx << "] all sockets connected; recv sessionId\n";
 
     // Receive session_id broadcast by SP. Binds all this-session AEAD to
     // this run; defeats cross-session replay.
     std::array<uint8_t, 32> sessionId;
     co_await spSock.recv(coproto::span<uint8_t>(sessionId.data(), sessionId.size()));
+    std::cerr << "[S" << selfIdx << "] sessionId received; running MpSpHandshake\n";
 
-    // SP↔sender DH: must happen before sending anything authenticated.
     auto spKeyRaw = co_await MpSpHandshake::runSender(spSock, selfIdx);
+    std::cerr << "[S" << selfIdx << "] MpSpHandshake done\n";
     auto spKey = volePSI::mpstar::deriveSessionKey(spKeyRaw, sessionId, "sp_session");
 
+    std::cerr << "[S" << selfIdx << "] parsing CSV " << inputPath << "\n";
     auto [ids, payloads] = parseCsv(inputPath);
+    std::cerr << "[S" << selfIdx << "] CSV parsed: " << ids.size() << " ids, "
+              << payloads.size() << " payloads\n";
     if (ids.size() != payloads.size()) {
         throw std::runtime_error("MpsaDriver: ID / payload size mismatch");
     }
 
     co_await spSock.send(ids.size());
+    std::cerr << "[S" << selfIdx << "] sent set size; running MPSI\n";
 
     RsMpsi3rdPSender mpsi;
     mpsi.init(ids.size(), ids.size(), 40, sysRandomSeed(), false, 1);
     auto bitvec = co_await mpsi.runIntersection(span<block>(ids), spSock, selfIdx, N);
     uint64_t C = mpsi.getCardinality();
+    std::cerr << "[S" << selfIdx << "] MPSI done; C=" << C << "\n";
 
+    std::cerr << "[S" << selfIdx << "] building c_i (C=" << C << ", ids=" << ids.size()
+              << ", bitvec=" << bitvec.size() << ")\n";
     std::vector<block> c_i(C, ZeroBlock);
     {
         uint64_t k = 0;
@@ -209,19 +224,36 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
             if (bitvec[j]) c_i[k++] = payloads[j];
         }
     }
+    std::cerr << "[S" << selfIdx << "] building r_i (C=" << C << ")\n";
     std::vector<block> r_i(C);
-    PRNG(sysRandomSeed()).get(r_i.data(), C * sizeof(block));
+    std::cerr << "[S" << selfIdx << "] r_i allocated at " << (void*)r_i.data() << "; seeding PRNG\n";
+    {
+        PRNG prng;
+        prng.SetSeed(sysRandomSeed());
+        std::cerr << "[S" << selfIdx << "] PRNG seeded; calling get<block>(ptr, " << C << ")\n";
+        prng.get<block>(r_i.data(), C);
+    }
+    std::cerr << "[S" << selfIdx << "] r_i filled\n";
     std::vector<block> m_i(C);
+    std::cerr << "[S" << selfIdx << "] m_i allocated at " << (void*)m_i.data() << "; XOR loop\n";
     for (uint64_t j = 0; j < C; ++j) {
         m_i[j] = c_i[j] ^ r_i[j];
     }
-    // AEAD-wrap m_i under the SP key so SP can detect tampering / forgery.
+    std::cerr << "[S" << selfIdx << "] m_i built; AEAD-encrypting\n";
+    // AEAD-wrap m_i under the SP key; length-prefixed send so SP's recv can
+    // size its vector correctly.
     auto m_i_plain = volePSI::mpstar::serializeBlocks(m_i);
     auto m_i_ct = volePSI::mpstar::aeadEncrypt(m_i_plain, spKey);
+    uint64_t ctLen = m_i_ct.size();
+    co_await spSock.send(ctLen);
     co_await spSock.send(std::move(m_i_ct));
+    std::cerr << "[S" << selfIdx << "] m_i sent (" << ctLen << " bytes)\n";
 
+    std::cerr << "[S" << selfIdx << "] making star channel\n";
     MpStarChannel chan(std::move(spSock), selfIdx, N);
+    std::cerr << "[S" << selfIdx << "] running MpStarSetup::runSender\n";
     auto setup = co_await MpStarSetup::runSender(chan, selfIdx, N);
+    std::cerr << "[S" << selfIdx << "] MpStarSetup done\n";
 
     // Phase 0: sender 0 collects every other sender's r_i (encrypted under
     // session-bound pairwise key); other senders ship r_i to sender 0.
