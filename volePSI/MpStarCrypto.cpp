@@ -75,5 +75,31 @@ std::array<uint8_t, 32> deriveSessionKey(
     return out;
 }
 
+std::array<uint8_t, 32> commit(
+    const std::vector<uint8_t>& message,
+    const std::array<uint8_t, 16>& nonce)
+{
+    std::array<uint8_t, 32> out;
+    oc::RandomOracle ro(32);
+    // Domain separation: prevent commitment collision with deriveSessionKey
+    // or any other RO use that happens to feed the same bytes.
+    static const uint8_t kCommitTag[] = "mpstar.commit.v1";
+    ro.Update(kCommitTag, sizeof(kCommitTag) - 1);
+    ro.Update(message.data(), static_cast<uint32_t>(message.size()));
+    ro.Update(nonce.data(), nonce.size());
+    ro.Final(out.data());
+    return out;
+}
+
+bool verifyCommit(
+    const std::vector<uint8_t>& message,
+    const std::array<uint8_t, 16>& nonce,
+    const std::array<uint8_t, 32>& expected)
+{
+    auto got = commit(message, nonce);
+    // Constant-time compare via sodium.
+    return sodium_memcmp(got.data(), expected.data(), got.size()) == 0;
+}
+
 } // namespace mpstar
 } // namespace volePSI

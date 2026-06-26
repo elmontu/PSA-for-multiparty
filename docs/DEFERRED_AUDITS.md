@@ -176,10 +176,31 @@ Verified: `./tests/run_mpsa_smoke.sh` PASS. First output row decodes as `(val0_4
 
 Communication cost is N× the previous single-column protocol (linear in N as expected).
 
-## What's still genuinely open (post-Round 15)
+## Round 16 — T1 partial: Phase 0 commit-and-open
 
-- **RsMpsiVole upstream wiring** — still scaffolded; needs Zhang ePrint 2023/1690 or KMPRT real implementation.
-- **Malicious-secure shuffle** — research-grade, see `docs/MALICIOUS_UPGRADE_ROADMAP.md`.
+Lightweight malicious hardening of the Phase 0 r_j exchange:
+- Each sender j>0 picks a 16-byte nonce, computes `commit_j = H("mpstar.commit.v1" || serialize(r_j) || nonce_j)`, and **broadcasts** commit_j to ALL peers via the mesh.
+- Sender 0 receives `(serialize(r_j) || nonce_j)` AEAD'd from each sender j>0 and verifies the commit opens correctly. Mismatch ⇒ abort with attribution.
+- Other senders hold their commit values for later challenge (non-repudiation).
+- New helpers: `volePSI::mpstar::commit(message, nonce)` and `verifyCommit(message, nonce, expected)`.
+
+Smoke test still PASSes. Catches sender-j-equivocates-r_j-to-different-recipients (which doesn't happen in our single-recipient topology, but the commitments still bind sender j to its value for any post-hoc dispute).
+
+The **full** malicious-secure cascade (information-theoretic MACs on every share, OSN-twice trick, batched verification) is specified in `docs/MALICIOUS_CASCADE_DESIGN.md` with paper refs, subtask decomposition, and effort estimate (~5 days).
+
+## Multi-improvement roadmap (rounds 16-19)
+
+Planned theoretical improvements:
+- **Round 16 (DONE)**: Phase 0 commit-and-open + full malicious cascade design doc.
+- **Round 17**: Cardinality-hiding via dummy padding to a power-of-2 upper bound. Closes the SP-learns-exact-C leak.
+- **Round 18**: Post-quantum hybrid session keys (X25519 + ML-KEM/Kyber-768) for HNDL resistance.
+- **Round 19**: Security analysis writeup (`docs/SECURITY_ANALYSIS.md`) + composition with FL downstream.
+
+## What's still genuinely open (post-Round 16)
+
+- **RsMpsiVole upstream wiring** — assessed: would require ~5000 LoC port from Visa-Research/volepsi. Documented in `docs/RSMPSI_VOLE_INTEGRATION.md`. Pragmatic call: skip unless there's a deployment-driving reason.
+- **Full malicious-secure cascade** — design spec'd in `docs/MALICIOUS_CASCADE_DESIGN.md`; ~5 days of focused work to implement.
+- **Active-OSN replacement** (CGP SSS) — research-grade, see `docs/MALICIOUS_UPGRADE_ROADMAP.md`.
 - **HIGH** RsMpsiVole upstream wiring: needs the upstream `volePSI::RsPsiSender`/`RsPsiReceiver` headers (now confirmed available at `out/install/linux/include/volePSI/`) + the name-collision rename in Option 1 of `RSMPSI_VOLE_INTEGRATION.md`. 2-3 days of focused work.
 - **HIGH** Malicious-secure shuffle (RSS-3PC for N=3, CGP chain for N≥4): see `MALICIOUS_UPGRADE_ROADMAP.md`. 2-3 weeks (Path A) to 4-6 weeks (Path B) of cryptographer-engineer time with the papers in hand. The OSN-pi finding above strengthens the case for picking up a separate shuffle primitive entirely rather than salvaging the cascade-OSN path.
 

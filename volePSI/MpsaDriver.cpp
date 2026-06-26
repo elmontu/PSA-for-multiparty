@@ -293,31 +293,90 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
     auto setup = co_await MpStarSetup::runSender(chan, selfIdx, N);
     LOG << "[S" << selfIdx << "] MpStarSetup done\n";
 
-    // Phase 0 (N-column variant): sender 0 collects every other sender j's
-    // r_j (encrypted) and stores them PER-COLUMN — ownMasks[j] = r_j.
-    // Sender 0's own column: ownMasks[0] = r_i. Other senders ship r_i to
-    // sender 0 and hold zero-mask columns themselves.
+    // Phase 0 (N-column + commit-and-open hardening):
+    //
+    // 1) Every sender j>0 picks a fresh 16-byte nonce_j, computes
+    //    commit_j = H("mpstar.commit.v1" || serialize(r_j) || nonce_j),
+    //    and BROADCASTS commit_j to ALL peers (every k != j).
+    // 2) Every sender k receives commit_j from every peer j (k will also
+    //    receive its own commit echoed back from sender 0 — discard).
+    // 3) Sender 0 receives (serialize(r_j) || nonce_j) AEAD'd from each
+    //    sender j>0 and VERIFIES commit_j opens correctly. Mismatch ⇒ abort.
+    // 4) Other senders (k != 0) hold their commits for later challenge.
+    //
+    // Catches: sender j providing different r_j values to different recipients
+    // (in the current single-recipient topology this can't happen; but
+    // commitments still bind sender j to the value, enabling non-repudiation
+    // if a dispute arises after the protocol). With T1's full info-theoretic
+    // MAC layer (see docs/MALICIOUS_CASCADE_DESIGN.md) this generalizes to
+    // catching wrong-r in the cascade too.
     using volePSI::mpstar::serializeBlocks;
     using volePSI::mpstar::deserializeBlocks;
     using volePSI::mpstar::aeadEncrypt;
     using volePSI::mpstar::aeadDecrypt;
     using volePSI::mpstar::deriveSessionKey;
+    using volePSI::mpstar::commit;
+    using volePSI::mpstar::verifyCommit;
 
+    // ---- compute my own commitment + nonce ----
+    std::array<uint8_t, 16> nonce_i;
+    randombytes_buf(nonce_i.data(), nonce_i.size());
+    auto r_i_bytes = serializeBlocks(r_i);
+    auto commit_i  = commit(r_i_bytes, nonce_i);
+
+    // ---- broadcast commit_i to every peer (32 bytes opaque) ----
+    if (selfIdx > 0) {
+        std::vector<uint8_t> commitBytes(commit_i.begin(), commit_i.end());
+        for (uint32_t k = 0; k < N; ++k) {
+            if (k == selfIdx) continue;
+            co_await chan.sendTo(k, commitBytes);  // sender j>0 ships its commit
+        }
+    }
+    LOG << "[S" << selfIdx << "] commit phase: broadcast done\n";
+
+    // ---- receive commit_j from every peer j (only j>0 actually broadcast) ----
+    std::vector<std::array<uint8_t, 32>> peerCommits(N);  // peerCommits[j] for j>0
+    for (uint32_t j = 1; j < N; ++j) {
+        if (j == selfIdx) continue;
+        auto cb = co_await chan.recvFrom(j);
+        if (cb.size() != 32) {
+            throw std::runtime_error("MpsaDriver: bad commit size from peer " + std::to_string(j));
+        }
+        std::copy(cb.begin(), cb.end(), peerCommits[j].begin());
+    }
+    LOG << "[S" << selfIdx << "] commit phase: peer commits received\n";
+
+    // ---- Phase 0 open: senders j>0 ship (r_j || nonce_j) to sender 0 ----
     std::vector<std::vector<block>> ownMasks(N);
     if (selfIdx == 0) {
-        ownMasks[0] = r_i;  // sender 0's own mask
+        ownMasks[0] = r_i;
         for (uint32_t j = 1; j < N; ++j) {
             auto sessionKey = deriveSessionKey(setup.key(j), sessionId, "pair_session");
             auto ct    = co_await chan.recvFrom(j);
             auto plain = aeadDecrypt(ct, sessionKey);
-            ownMasks[j] = deserializeBlocks(plain, C);
+            if (plain.size() != C * sizeof(block) + 16) {
+                throw std::runtime_error("MpsaDriver: bad opened-message size from sender "
+                                         + std::to_string(j));
+            }
+            std::vector<uint8_t> r_j_bytes(plain.begin(), plain.begin() + C * sizeof(block));
+            std::array<uint8_t, 16> nonce_j;
+            std::copy(plain.end() - 16, plain.end(), nonce_j.begin());
+
+            if (!verifyCommit(r_j_bytes, nonce_j, peerCommits[j])) {
+                throw std::runtime_error("MpsaDriver: commitment mismatch from sender "
+                                         + std::to_string(j) + " — abort");
+            }
+            ownMasks[j] = deserializeBlocks(r_j_bytes, C);
         }
+        LOG << "[S0] commit phase: all peer opens verified ✓\n";
     } else {
         auto sessionKey = deriveSessionKey(setup.key(0), sessionId, "pair_session");
-        auto plain = serializeBlocks(r_i);
-        auto ct    = aeadEncrypt(plain, sessionKey);
+        std::vector<uint8_t> opened;
+        opened.reserve(r_i_bytes.size() + 16);
+        opened.insert(opened.end(), r_i_bytes.begin(), r_i_bytes.end());
+        opened.insert(opened.end(), nonce_i.begin(), nonce_i.end());
+        auto ct = aeadEncrypt(opened, sessionKey);
         co_await chan.sendTo(0, std::move(ct));
-        // Other senders hold zero per-column masks initially.
         for (uint32_t c = 0; c < N; ++c) {
             ownMasks[c] = std::vector<block>(C, ZeroBlock);
         }

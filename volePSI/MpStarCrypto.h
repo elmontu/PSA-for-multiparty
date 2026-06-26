@@ -34,5 +34,25 @@ std::array<uint8_t, 32> deriveSessionKey(
     const std::array<uint8_t, 32>& sessionId,
     const std::string& purpose);
 
+// Hiding + binding commitment to a vector of blocks. Output is a 32-byte
+// digest: commit = H(message || nonce). The caller chooses a random nonce
+// (16 bytes is sufficient for binding under SHA-2 / Blake2's collision
+// resistance). To open: re-supply (message, nonce); the verifier recomputes
+// and compares.
+//
+// Used for malicious-secure Phase 0: each sender broadcasts a commitment to
+// its r_i BEFORE opening to sender 0. Other senders hold the commitment as
+// a check value; sender 0 verifies on receipt.
+std::array<uint8_t, 32> commit(
+    const std::vector<uint8_t>& message,
+    const std::array<uint8_t, 16>& nonce);
+
+// Verify a commitment opens correctly. Returns true iff
+// commit(message, nonce) == expected. Constant-time comparison.
+bool verifyCommit(
+    const std::vector<uint8_t>& message,
+    const std::array<uint8_t, 16>& nonce,
+    const std::array<uint8_t, 32>& expected);
+
 } // namespace mpstar
 } // namespace volePSI
