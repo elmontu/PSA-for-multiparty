@@ -188,11 +188,22 @@ Smoke test still PASSes. Catches sender-j-equivocates-r_j-to-different-recipient
 
 The **full** malicious-secure cascade (information-theoretic MACs on every share, OSN-twice trick, batched verification) is specified in `docs/MALICIOUS_CASCADE_DESIGN.md` with paper refs, subtask decomposition, and effort estimate (~5 days).
 
+## Round 17 — T2: cardinality-hiding via output padding (DONE, partial)
+
+- New CLI flag `-cmax <N>`: pad output to at least `N` rows.
+- Senders pad `c_i` (and matching `r_i`) from `C` to `C_max` with PRNG-random "dummy" blocks. SP also processes `C_max` rows.
+- Cascade unchanged; just operates on bigger vectors.
+- Output file `out_mpsa.csv` has `C_max` rows; real intersection rows shuffled in among random dummies. Observer of just the output cannot count `C` exactly.
+- **Residual leak documented**: SP still learns `C` from MPSI itself (it counts hashes). Full hiding from SP needs Circuit-PSI or shared-cardinality variant — see `docs/CARDINALITY_HIDING_DESIGN.md` for three options + effort estimates.
+- **Dummy filter design**: prototype's dummies are PRNG-random (a payload-aware consumer can detect by format). Design for key-only filtering (`K_filter` + AEAD per row) specified in the same doc.
+
+Verified: `-cmax 256` produces 256-row output (mix of 100 real + 156 dummy rows, indistinguishable in the file). Default (no `-cmax`) still PASSes the smoke test.
+
 ## Multi-improvement roadmap (rounds 16-19)
 
 Planned theoretical improvements:
 - **Round 16 (DONE)**: Phase 0 commit-and-open + full malicious cascade design doc.
-- **Round 17**: Cardinality-hiding via dummy padding to a power-of-2 upper bound. Closes the SP-learns-exact-C leak.
+- **Round 17 (DONE)**: Cardinality-hiding via output padding + full design doc covering SP-side hiding.
 - **Round 18**: Post-quantum hybrid session keys (X25519 + ML-KEM/Kyber-768) for HNDL resistance.
 - **Round 19**: Security analysis writeup (`docs/SECURITY_ANALYSIS.md`) + composition with FL downstream.
 

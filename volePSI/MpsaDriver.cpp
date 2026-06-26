@@ -97,7 +97,8 @@ static coproto::Socket senderConnect(const std::string& host, int port)
 #endif
 }
 
-macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPath)
+macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPath,
+                             uint64_t padCmax)
 {
     std::vector<coproto::Socket> senderSocks(N);
     for (uint32_t i = 0; i < N; ++i) {
@@ -152,6 +153,13 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
     uint64_t C = co_await mpsi.runIntersection(senderSocks, N, perSenderSetSize);
     LOG << "[SP] MPSI done; C=" << C << "\n";
 
+    // Apply the same C_max padding the senders will. After this point
+    // SP processes Ceff rows; C is the real intersection (still leaked
+    // by MPSI to SP — full hiding needs oblivious MPSI, see design doc).
+    uint64_t Ceff = std::max(C, padCmax);
+    LOG << "[SP] effective row count Ceff=" << Ceff << " (pad from C=" << C << ")\n";
+    C = Ceff;
+
     // Receive AEAD-wrapped masked columns m_i. SP keeps each sender's
     // column SEPARATELY (no XOR-aggregation) so it can shuffle N parallel
     // streams. initialMasked[c] is sender c's column.
@@ -183,7 +191,8 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
 }
 
 macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
-                                 const std::string& inputPath, const std::string& spHost)
+                                 const std::string& inputPath, const std::string& spHost,
+                                 uint64_t padCmax)
 {
     LOG << "[S" << selfIdx << "] connecting spSock\n";
     coproto::Socket spSock = senderConnect(spHost, basePort + selfIdx);
@@ -253,30 +262,48 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
     uint64_t C = mpsi.getCardinality();
     LOG << "[S" << selfIdx << "] MPSI done; C=" << C << "\n";
 
-    LOG << "[S" << selfIdx << "] building c_i (C=" << C << ", ids=" << ids.size()
+    // Cardinality-hiding via output padding (Round 17). If -cmax is set
+    // and > real C, the sender pads c_i with PRNG-random blocks. After the
+    // cascade these padded "dummy" rows are mixed with real intersection
+    // rows in the output. SP still learns C from MPSI itself (residual
+    // leak — see docs/CARDINALITY_HIDING_DESIGN.md for full-hiding plan).
+    uint64_t Ceff = std::max(C, padCmax);
+    LOG << "[S" << selfIdx << "] padding C=" << C << " to Ceff=" << Ceff
+        << " (cardinality-hiding from downstream)\n";
+
+    LOG << "[S" << selfIdx << "] building c_i (Ceff=" << Ceff << ", ids=" << ids.size()
               << ", bitvec=" << bitvec.size() << ")\n";
-    std::vector<block> c_i(C, ZeroBlock);
+    std::vector<block> c_i(Ceff, ZeroBlock);
     {
         uint64_t k = 0;
         for (uint64_t j = 0; j < ids.size() && k < C; ++j) {
             if (bitvec[j]) c_i[k++] = payloads[j];
         }
+        // Fill remaining (Ceff - C) entries with PRNG-random "dummies".
+        if (Ceff > C) {
+            PRNG dprng;
+            dprng.SetSeed(sysRandomSeed());
+            dprng.get<block>(c_i.data() + C, Ceff - C);
+        }
     }
-    LOG << "[S" << selfIdx << "] building r_i (C=" << C << ")\n";
-    std::vector<block> r_i(C);
+    LOG << "[S" << selfIdx << "] building r_i (Ceff=" << Ceff << ")\n";
+    std::vector<block> r_i(Ceff);
     LOG << "[S" << selfIdx << "] r_i allocated at " << (void*)r_i.data() << "; seeding PRNG\n";
     {
         PRNG prng;
         prng.SetSeed(sysRandomSeed());
-        LOG << "[S" << selfIdx << "] PRNG seeded; calling get<block>(ptr, " << C << ")\n";
-        prng.get<block>(r_i.data(), C);
+        LOG << "[S" << selfIdx << "] PRNG seeded; calling get<block>(ptr, " << Ceff << ")\n";
+        prng.get<block>(r_i.data(), Ceff);
     }
     LOG << "[S" << selfIdx << "] r_i filled\n";
-    std::vector<block> m_i(C);
+    std::vector<block> m_i(Ceff);
     LOG << "[S" << selfIdx << "] m_i allocated at " << (void*)m_i.data() << "; XOR loop\n";
-    for (uint64_t j = 0; j < C; ++j) {
+    for (uint64_t j = 0; j < Ceff; ++j) {
         m_i[j] = c_i[j] ^ r_i[j];
     }
+
+    // Rest of the protocol uses Ceff instead of C.
+    C = Ceff;
     LOG << "[S" << selfIdx << "] m_i built; AEAD-encrypting\n";
     // AEAD-wrap m_i under the SP key; length-prefixed send so SP's recv can
     // size its vector correctly.
@@ -424,6 +451,11 @@ static void printMpsaUsage(std::ostream& os)
         "\n"
         "Common flags:\n"
         "    -v         print per-step debug logs to stderr\n"
+        "    -cmax <n>  cardinality-hiding: pad output to >= n rows\n"
+        "               (dummies are PRNG-random and shuffled with reals;\n"
+        "                hides the exact intersection size from any party\n"
+        "                that observes only the output file; SP still learns\n"
+        "                C via MPSI itself — see CARDINALITY_HIDING_DESIGN)\n"
         "\n"
         "Examples:\n"
         "  frontend -mpsa -N 3 -r 0\n"
@@ -449,6 +481,7 @@ void doFileMpsa(CLP& cmd)
     int role      = cmd.getOr<int>("r", 0);
     int basePort  = cmd.getOr<int>("port", 17500);
     std::string spHost = cmd.getOr<std::string>("host", "localhost");
+    uint64_t padCmax = cmd.getOr<uint64_t>("cmax", 0);  // 0 = no padding
 
     if (N < 2) {
         printMpsaUsage(std::cerr);
@@ -465,7 +498,7 @@ void doFileMpsa(CLP& cmd)
 
     if (role == 0) {
         std::string out = cmd.getOr<std::string>("out", "out_cleartext.csv");
-        macoro::sync_wait(runSpRole(N, basePort, out));
+        macoro::sync_wait(runSpRole(N, basePort, out, padCmax));
     } else if (role == 1) {
         uint32_t idx = cmd.getOr<uint32_t>("i", 0);
         std::string in = cmd.getOr<std::string>("in", "");
@@ -473,7 +506,7 @@ void doFileMpsa(CLP& cmd)
             printMpsaUsage(std::cerr);
             throw std::runtime_error("MpsaDriver: sender requires -in <csv> and -i in [0, N)");
         }
-        macoro::sync_wait(runSenderRole(N, idx, basePort, in, spHost));
+        macoro::sync_wait(runSenderRole(N, idx, basePort, in, spHost, padCmax));
     } else {
         printMpsaUsage(std::cerr);
         throw std::runtime_error("MpsaDriver: invalid -r role (use 0 for SP, 1 for sender)");
