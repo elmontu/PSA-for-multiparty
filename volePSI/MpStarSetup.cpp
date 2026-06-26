@@ -4,7 +4,6 @@
 #include "macoro/task.h"
 #include <sodium.h>
 #include <algorithm>
-#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -21,13 +20,10 @@ macoro::task<MpStarSetup> MpStarSetup::runSender(MpStarChannel& chan, uint32_t s
     std::array<uint8_t, 32> pk, sk;
     crypto_box_keypair(pk.data(), sk.data());
 
-    std::cerr << "[MpStarSetup S" << selfIdx << "] sending pk to all peers\n";
     for (uint32_t j = 0; j < senderCount; ++j)
     {
         if (j == selfIdx) continue;
-        std::cerr << "[MpStarSetup S" << selfIdx << "] sendTo(" << j << ")\n";
         co_await chan.sendTo(j, std::vector<uint8_t>(pk.begin(), pk.end()));
-        std::cerr << "[MpStarSetup S" << selfIdx << "] sendTo(" << j << ") done\n";
     }
 
     // 3. Receive public keys and derive pairwise keys.
@@ -39,9 +35,7 @@ macoro::task<MpStarSetup> MpStarSetup::runSender(MpStarChannel& chan, uint32_t s
     {
         if (j == selfIdx) continue;
 
-        std::cerr << "[MpStarSetup S" << selfIdx << "] recvFrom(" << j << ")\n";
         auto remoteBytes = co_await chan.recvFrom(j);
-        std::cerr << "[MpStarSetup S" << selfIdx << "] recvFrom(" << j << ") got " << remoteBytes.size() << "\n";
         if (remoteBytes.size() != 32)
         {
             throw std::runtime_error(

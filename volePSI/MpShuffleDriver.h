@@ -58,7 +58,6 @@ public:
     // revealSocket: socket to the last sender (senderCount-1) for final R.
     // spKeys: per-sender session keys (size = senderCount).
     static macoro::task<std::vector<oc::block>> runSp(
-        MpStarChannel& spChan,
         std::vector<coproto::Socket>& osnSocksA,
         std::vector<coproto::Socket>& osnSocksB,
         coproto::Socket& revealSocket,

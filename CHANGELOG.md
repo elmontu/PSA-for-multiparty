@@ -51,9 +51,28 @@ Added the N-party Private Set Alignment scaffold:
 - `.github/workflows/ci.yml` — Ubuntu 22.04, build + run unit tests on every
   push and PR to main
 
-## Known build-dependent / research-grade items (not yet done)
+## END-TO-END MPSA WORKING (commit 1fd0589)
+- Smoke test: `./tests/run_mpsa_smoke.sh` PASSes with N=3, intersection=100, total=1000/sender.
+- Replaced star-with-relay design with direct peer-to-peer mesh (sender↔sender
+  TCP connections; SP no longer in the data path for inter-sender traffic).
+  The star-with-relay path deadlocked on coproto's single-thread io_context.
+- Canonical pair iteration (sender i accepts, sender j connects in lockstep)
+  avoids peer-setup deadlock.
+- coproto's `Socket::flush()` is required before destruction; added flushes
+  in `MpStarChannel::sendTo` and at protocol exits.
+- Three other build/runtime bugs caught and fixed earlier in the rounds:
+  `coproto::Socket::recv(vector)` doesn't auto-resize (pre-size or length-
+  prefix); `PRNG(seed).get(ptr, bytes)` segfaults (use `SetSeed` + template
+  get); OSN had hardcoded PRNG seed (added `init_wj_seeded`).
+
+## Post-milestone cleanup
+- `-v / -verbose` CLI flag gates per-step debug logs (default silent).
+- Removed dead `MpShuffleDriver::runSp` spChan parameter.
+
+## Known research-grade items still open
 See `docs/DEFERRED_AUDITS.md`. Headline items:
-- OSN role/semantics verification (needs unit test against `osn/OSNSender.cpp`)
+- Output is currently XOR-aggregated; N-column joined-table format needs a
+  Phase-0 redesign (linear in N effort).
 - RsMpsiVole upstream wiring (Zhang 2023/1690 or KMPRT; needs upstream
-  volePSI headers; name collision with local `RsPsi.h` to resolve)
-- Malicious-secure cascade shuffle (RSS-3PC for N=3 or SSS chain for N≥4)
+  volePSI headers; name collision with local `RsPsi.h` to resolve).
+- Malicious-secure cascade shuffle (RSS-3PC for N=3 or SSS chain for N≥4).

@@ -185,7 +185,6 @@ macoro::task<std::vector<oc::block>> MpShuffleDriver::runSender(
 }
 
 macoro::task<std::vector<oc::block>> MpShuffleDriver::runSp(
-    MpStarChannel& /*spChan*/,
     std::vector<coproto::Socket>& osnSocksA,
     std::vector<coproto::Socket>& osnSocksB,
     coproto::Socket& revealSocket,

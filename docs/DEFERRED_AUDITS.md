@@ -147,6 +147,28 @@ This sub-step is **scaffolding, not production code**. It will not compile or ru
   - `coproto::Socket::recv(std::vector<uint8_t>&)` does NOT auto-resize; reading into an empty vector reads 0 bytes silently. Bug existed in 2 places (MPSI bitvec recv, masked-column ciphertext recv). Fix: pre-size the vector (for known lengths) or send a length prefix first (for variable lengths like AEAD ciphertext).
   - `PRNG(seed).get(ptr, byteCount)` crashed; the working pattern is `PRNG prng; prng.SetSeed(seed); prng.get<T>(ptr, count)` where `count` is element count, not byte count.
 - **Remaining blocker — coproto threading model:** Each sender's `MpStarSetup::runSender` calls `chan.sendTo(j, pk)` (succeeds — bytes reach SP) then `chan.recvFrom(j)` (hangs). SP's relayLoop is spawned in a std::thread and runs its own producer/consumer threads via independent `macoro::sync_wait` calls. Likely failure mode: coproto's `AsioSocket` is built on a single `io_context` that assumes ONE driver thread; multiple `sync_wait`s on different threads either don't drive the io_context or contend for it. The relay reads incoming frames but doesn't deliver them to the destination socket. Fix requires architectural rework — likely `macoro::when_all_ready` over all relay tasks driven by the SAME thread as the main coroutine, or use coproto's intended scheduler integration. Not a quick line fix.
+
+## Round 13 — END-TO-END MPSA WORKING
+
+The threading-model blocker above was resolved by **replacing the star-with-relay design with a direct peer-to-peer mesh**: for each sender pair (i, j) with i < j, sender i accepts a TCP connection and sender j connects. SP no longer touches sender↔sender traffic. MpStarChannel becomes a thin per-peer wrapper. `relayLoop`, `requestStop`, queues, std::threads — all gone.
+
+Canonical pair iteration avoids the obvious deadlock at peer-setup time (every sender iterates pairs in the same canonical order; at each step exactly one sender accepts and one connects). Additional fixes:
+- `coproto::Socket::flush()` is required before destruction; without it, `terminate()` fires. Added flush in `MpStarChannel::sendTo` (per send) and at `runSpRole`/`runSenderRole` exits.
+
+**Smoke test result:** `./tests/run_mpsa_smoke.sh` PASSes with N=3, intersection=100, total=1000 records per sender. Output: 100 hex rows representing the per-position XOR of all senders' payloads at intersection rows (this is what the current Phase 0 aggregation produces).
+
+## Round 14 — post-milestone cleanup
+
+- Removed dead `MpStarChannel::runSp` parameter (no longer used after the relay was deleted).
+- `-v / -verbose` CLI flag added; gates per-step debug logs (`LOG` macro). Default mode is silent.
+- Removed bisection cerrs from `MpStarSetup` and `RsMpsi`.
+- Updated `MpsaDriver.cpp` file header to document the peer-mesh design.
+
+## What's still genuinely open (post-Round 14)
+
+- **Output format is XOR-aggregated**, not an N-column joined table. The cryptographic mechanism (intersection + shuffle + AEAD) is correct end-to-end; what's missing is a Phase 0 design that keeps each sender's payload in a separate column. ~1 round of design work: either run the cascade N times in parallel under the same seeded permutations (cost: linear in N), or use a wider payload block layout. Either is straightforward now that the underlying primitives work.
+- **RsMpsiVole upstream wiring** — still scaffolded; needs Zhang ePrint 2023/1690 or KMPRT real implementation.
+- **Malicious-secure shuffle** — research-grade, see `docs/MALICIOUS_UPGRADE_ROADMAP.md`.
 - **HIGH** RsMpsiVole upstream wiring: needs the upstream `volePSI::RsPsiSender`/`RsPsiReceiver` headers (now confirmed available at `out/install/linux/include/volePSI/`) + the name-collision rename in Option 1 of `RSMPSI_VOLE_INTEGRATION.md`. 2-3 days of focused work.
 - **HIGH** Malicious-secure shuffle (RSS-3PC for N=3, CGP chain for N≥4): see `MALICIOUS_UPGRADE_ROADMAP.md`. 2-3 weeks (Path A) to 4-6 weeks (Path B) of cryptographer-engineer time with the papers in hand. The OSN-pi finding above strengthens the case for picking up a separate shuffle primitive entirely rather than salvaging the cascade-OSN path.
 
