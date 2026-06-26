@@ -97,13 +97,20 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
     //   basePort + N + 2*(N-1): reveal socket from last sender
     // Total ports used: 3N - 1.
     std::cerr << "[SP] accepting sender sockets...\n";
+    // Port layout (Round 13 — peer-mesh design, SP no longer relays):
+    //   basePort + i        (i = 0..N-1):   per-sender SP socket
+    //   basePort + N + 2k   (k = 0..N-2):   OSN call A socket with sender k
+    //   basePort + N + 2k+1 (k = 0..N-2):   OSN call B socket with sender k
+    //   basePort + N + 2(N-1):              reveal socket from last sender
+    // Sender-sender mesh ports are at basePort + 3N + (i*N + j) for pair (i,j)
+    // with i<j; senders i ACCEPT, senders j CONNECT. SP plays no part.
     std::vector<coproto::Socket> osnSocksA(N - 1), osnSocksB(N - 1);
     for (uint32_t k = 0; k < N - 1; ++k) {
         osnSocksA[k] = spAccept(basePort + N + 2 * k);
         osnSocksB[k] = spAccept(basePort + N + 2 * k + 1);
     }
     coproto::Socket revealSock = spAccept(basePort + N + 2 * (N - 1));
-    std::cerr << "[SP] all " << (3*N - 1) << " sockets accepted\n";
+    std::cerr << "[SP] all SP-side sockets accepted\n";
 
     std::array<uint8_t, 32> sessionId;
     randombytes_buf(sessionId.data(), sessionId.size());
@@ -147,23 +154,22 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
     }
     std::cerr << "[SP] masked columns aggregated\n";
 
-    std::cerr << "[SP] making star channel\n";
-    MpStarChannel spChan = MpStarChannel::makeSp(std::move(senderSocks));
-
-    std::cerr << "[SP] spawning relay thread\n";
-    std::thread relayThread([&spChan]() {
-        try { macoro::sync_wait(spChan.relayLoop()); } catch (...) {}
-    });
-
+    // No more SP-side MpStarChannel/relay — senders talk to each other
+    // directly via the peer mesh. SP only orchestrates the OSN cascade.
     std::cerr << "[SP] running MpShuffleDriver::runSp\n";
+    // spChan parameter to runSp is no longer used; satisfy the size
+    // assertion with a same-N dummy.
+    std::vector<coproto::Socket> dummyForApi(N);
+    MpStarChannel dummyChan(std::move(dummyForApi), 0, N);  // unused
     auto shuffled = co_await MpShuffleDriver::runSp(
-        spChan, osnSocksA, osnSocksB, revealSock,
+        dummyChan, osnSocksA, osnSocksB, revealSock,
         N, C, std::move(initialMasked), spKeys, sessionId);
     std::cerr << "[SP] runSp done\n";
 
-    // Clean shutdown of the relay (no more detach + die-on-exit).
-    spChan.requestStop();
-    if (relayThread.joinable()) relayThread.join();
+    // Flush all SP sockets before destruction to keep coproto happy.
+    for (auto& sock : osnSocksA) co_await sock.flush();
+    for (auto& sock : osnSocksB) co_await sock.flush();
+    co_await revealSock.flush();
 
     writeBlocksAsHex(outPath, shuffled);
 }
@@ -174,6 +180,30 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
     std::cerr << "[S" << selfIdx << "] connecting spSock\n";
     coproto::Socket spSock = senderConnect(spHost, basePort + selfIdx);
     std::cerr << "[S" << selfIdx << "] spSock connected\n";
+
+    // Peer-mesh sockets (Round 13): direct sender↔sender. For each pair
+    // (i,j) with i<j, sender i ACCEPTS at port (basePort + 3N + i*N + j),
+    // sender j CONNECTS. Avoid deadlock by iterating pairs in CANONICAL
+    // order across all senders — each step has exactly one (accept,
+    // connect) pair so they meet up.
+    auto peerPort = [&](uint32_t i, uint32_t j) {
+        return basePort + 3 * N + i * N + j;
+    };
+    std::vector<coproto::Socket> peerSocks(N);
+    for (uint32_t i = 0; i < N; ++i) {
+        for (uint32_t j = i + 1; j < N; ++j) {
+            if (selfIdx == i) {
+                std::cerr << "[S" << selfIdx << "] accepting peer " << j << "\n";
+                peerSocks[j] = coproto::asioConnect(
+                    "localhost:" + std::to_string(peerPort(i, j)), true);
+            } else if (selfIdx == j) {
+                std::cerr << "[S" << selfIdx << "] connecting peer " << i << "\n";
+                peerSocks[i] = senderConnect(spHost, peerPort(i, j));
+            }
+            // else: this sender sits this pair out.
+        }
+    }
+    std::cerr << "[S" << selfIdx << "] peer mesh established\n";
 
     // Sockets for the two-OSN-per-round cascade design.
     // - Sender k = selfIdx in [0, N-1) connects two OSN sockets to SP
@@ -249,8 +279,8 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
     co_await spSock.send(std::move(m_i_ct));
     std::cerr << "[S" << selfIdx << "] m_i sent (" << ctLen << " bytes)\n";
 
-    std::cerr << "[S" << selfIdx << "] making star channel\n";
-    MpStarChannel chan(std::move(spSock), selfIdx, N);
+    std::cerr << "[S" << selfIdx << "] making star (peer-mesh) channel\n";
+    MpStarChannel chan(std::move(peerSocks), selfIdx, N);
     std::cerr << "[S" << selfIdx << "] running MpStarSetup::runSender\n";
     auto setup = co_await MpStarSetup::runSender(chan, selfIdx, N);
     std::cerr << "[S" << selfIdx << "] MpStarSetup done\n";
@@ -285,6 +315,19 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
     co_await MpShuffleDriver::runSender(
         chan, setup, selfIdx, N, C, std::move(ownMasks),
         osnSocketA, osnSocketB, revealSocket, spKey, sessionId);
+
+    // coproto requires all sockets to be flushed before destruction or
+    // terminate() fires. Flush every socket we held.
+    // (spSock was moved into chan; the chan's peer sockets get flushed via
+    // sendTo's own flush. Phase-0 sender 0 holds peerSocks for inbound but
+    // never sends after MpStarSetup, so no pending outbound there.)
+    if (selfIdx < N - 1) {
+        co_await osnSocketA.flush();
+        co_await osnSocketB.flush();
+    } else {
+        co_await revealSocket.flush();
+    }
+    std::cerr << "[S" << selfIdx << "] done\n";
 }
 
 } // anonymous namespace
