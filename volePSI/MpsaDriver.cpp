@@ -90,13 +90,18 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
         senderSocks[i] = spAccept(basePort + i);
     }
 
-    std::vector<coproto::Socket> osnSocks(N - 1);
-    for (uint32_t i = 0; i < N - 1; ++i) {
-        osnSocks[i] = spAccept(basePort + N + i);
+    // New port layout (Round 11 two-OSN-per-round):
+    //   basePort + i           (i = 0..N-1): per-sender star/MPSI socket
+    //   basePort + N + 2k      (k = 0..N-2): OSN call A socket with sender k
+    //   basePort + N + 2k + 1  (k = 0..N-2): OSN call B socket with sender k
+    //   basePort + N + 2*(N-1): reveal socket from last sender
+    // Total ports used: 3N - 1.
+    std::vector<coproto::Socket> osnSocksA(N - 1), osnSocksB(N - 1);
+    for (uint32_t k = 0; k < N - 1; ++k) {
+        osnSocksA[k] = spAccept(basePort + N + 2 * k);
+        osnSocksB[k] = spAccept(basePort + N + 2 * k + 1);
     }
-
-    // Accept the last sender's reveal channel (Phase 4 fix).
-    coproto::Socket revealSock = spAccept(basePort + 2 * N);
+    coproto::Socket revealSock = spAccept(basePort + N + 2 * (N - 1));
 
     // SP picks a per-session random ID and broadcasts it. This binds every
     // AEAD ciphertext in this MPSA invocation to this session, defeating
@@ -147,10 +152,9 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
         try { macoro::sync_wait(spChan.relayLoop()); } catch (...) {}
     });
 
-    // Push the reveal socket onto the OSN-rounds vector since MpShuffleDriver
-    // uses osnSocksPerRound.back() for the final reveal.
-    osnSocks.push_back(std::move(revealSock));
-    auto shuffled = co_await MpShuffleDriver::runSp(spChan, osnSocks, N, C, std::move(initialMasked), spKeys);
+    auto shuffled = co_await MpShuffleDriver::runSp(
+        spChan, osnSocksA, osnSocksB, revealSock,
+        N, C, std::move(initialMasked), spKeys, sessionId);
 
     // Clean shutdown of the relay (no more detach + die-on-exit).
     spChan.requestStop();
@@ -164,13 +168,17 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
 {
     coproto::Socket spSock = senderConnect(spHost, basePort + selfIdx);
 
-    coproto::Socket osnSock;
+    // Sockets for the two-OSN-per-round cascade design.
+    // - Sender k = selfIdx in [0, N-1) connects two OSN sockets to SP
+    //   (call A and call B) for the round it drives.
+    // - Sender N-1 connects only the reveal socket.
+    coproto::Socket osnSocketA, osnSocketB, revealSocket;
     if (selfIdx < N - 1) {
-        osnSock = senderConnect(spHost, basePort + N + selfIdx);
-    }
-    if (selfIdx == N - 1) {
-        // SP-side accept on basePort+2*N added in Phase 4 fix.
-        osnSock = senderConnect(spHost, basePort + 2 * N);
+        osnSocketA = senderConnect(spHost, basePort + N + 2 * selfIdx);
+        osnSocketB = senderConnect(spHost, basePort + N + 2 * selfIdx + 1);
+    } else {
+        // selfIdx == N - 1: only the reveal socket.
+        revealSocket = senderConnect(spHost, basePort + N + 2 * (N - 1));
     }
 
     // Receive session_id broadcast by SP. Binds all this-session AEAD to
@@ -242,7 +250,9 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
         ownMasks = std::vector<block>(C, ZeroBlock);
     }
 
-    co_await MpShuffleDriver::runSender(chan, setup, selfIdx, N, C, std::move(ownMasks), osnSock, spKey);
+    co_await MpShuffleDriver::runSender(
+        chan, setup, selfIdx, N, C, std::move(ownMasks),
+        osnSocketA, osnSocketB, revealSocket, spKey, sessionId);
 }
 
 } // anonymous namespace
