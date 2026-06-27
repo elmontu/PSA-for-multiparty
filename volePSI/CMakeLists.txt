@@ -5,6 +5,8 @@ set(SRCS
     "MpStarSetup.cpp"
     "MpStarCrypto.cpp"
     "MpSpHandshake.cpp"
+    "MpKem.cpp"
+    "MpHybridHandshake.cpp"
     "MpShuffleDriver.cpp"
     "RsMpsi.cpp"
     "RsMpsiVole.cpp"

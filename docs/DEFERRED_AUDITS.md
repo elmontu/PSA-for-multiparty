@@ -199,12 +199,27 @@ The **full** malicious-secure cascade (information-theoretic MACs on every share
 
 Verified: `-cmax 256` produces 256-row output (mix of 100 real + 156 dummy rows, indistinguishable in the file). Default (no `-cmax`) still PASSes the smoke test.
 
+## Round 18 — T5: post-quantum hybrid handshake (framework done, real KEM swap-in spec'd)
+
+- New CLI flag `-pq`: enables hybrid X25519 + KEM handshake instead of pure-X25519 MpSpHandshake.
+- New files:
+  - `volePSI/MpKem.{h,cpp}` — abstract `Kem` interface + `StubKem` placeholder (constant zeros; emits stderr warning when used; HAS THE RIGHT SHAPE OF ML-KEM-768 for drop-in swap).
+  - `volePSI/MpHybridHandshake.{h,cpp}` — runs X25519 ECDH AND a Kem exchange in parallel; combines shared secrets via `RandomOracle("mphybrid.v1" || x25519_ss || kem_ss || senderIdx_be)`.
+- MpsaDriver: when `-pq` set, uses `StubKem` (today); when not set, uses pure X25519 `MpSpHandshake` (default).
+- Smoke test verified both modes: default PASSes, `-pq` produces correct 100-row joined table with StubKem warning emitted.
+
+**Real Kem swap-in fully specified** in `docs/PQ_HYBRID_HANDSHAKE_DESIGN.md`. Three concrete options:
+- **liboqs** (Open Quantum Safe; recommended): ~½ day to wire `LiboqsMlKem768 : public Kem`. Reference code in the doc.
+- **pqcrystals/kyber** (reference impl): ~½ day; smaller dependency.
+- **BoringSSL or rustls**: ~½ day if the deployment already uses them.
+
+Per-protocol keys are ephemeral (forward-secret). Hybrid security: session key safe as long as ONE of X25519 / ML-KEM is unbroken — defence-in-depth for HNDL adversaries.
+
 ## Multi-improvement roadmap (rounds 16-19)
 
-Planned theoretical improvements:
 - **Round 16 (DONE)**: Phase 0 commit-and-open + full malicious cascade design doc.
 - **Round 17 (DONE)**: Cardinality-hiding via output padding + full design doc covering SP-side hiding.
-- **Round 18**: Post-quantum hybrid session keys (X25519 + ML-KEM/Kyber-768) for HNDL resistance.
+- **Round 18 (DONE)**: PQ-hybrid handshake framework + StubKem + full real-KEM swap-in spec.
 - **Round 19**: Security analysis writeup (`docs/SECURITY_ANALYSIS.md`) + composition with FL downstream.
 
 ## What's still genuinely open (post-Round 16)

@@ -20,6 +20,8 @@
 #include "MpStarSetup.h"
 #include "MpStarCrypto.h"
 #include "MpSpHandshake.h"
+#include "MpKem.h"
+#include "MpHybridHandshake.h"
 #include "MpShuffleDriver.h"
 #include "fileBased.h"
 
@@ -98,7 +100,7 @@ static coproto::Socket senderConnect(const std::string& host, int port)
 }
 
 macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPath,
-                             uint64_t padCmax)
+                             uint64_t padCmax, bool pqHybrid)
 {
     std::vector<coproto::Socket> senderSocks(N);
     for (uint32_t i = 0; i < N; ++i) {
@@ -133,9 +135,16 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
     for (uint32_t i = 0; i < N; ++i) {
         co_await senderSocks[i].send(coproto::span<const uint8_t>(sessionId.data(), sessionId.size()));
     }
-    LOG << "[SP] sessionId broadcast done; running MpSpHandshake\n";
-    auto spKeysRaw = co_await MpSpHandshake::runSp(senderSocks);
-    LOG << "[SP] MpSpHandshake done\n";
+    LOG << "[SP] sessionId broadcast done; running handshake\n";
+    std::vector<std::array<uint8_t, 32>> spKeysRaw;
+    if (pqHybrid) {
+        volePSI::mpstar::StubKem kem;
+        LOG << "[SP] using PQ-hybrid handshake (Kem=" << kem.name() << ")\n";
+        spKeysRaw = co_await MpHybridHandshake::runSp(senderSocks, kem);
+    } else {
+        spKeysRaw = co_await MpSpHandshake::runSp(senderSocks);
+    }
+    LOG << "[SP] handshake done\n";
     std::vector<std::array<uint8_t, 32>> spKeys(N);
     for (uint32_t i = 0; i < N; ++i) {
         spKeys[i] = volePSI::mpstar::deriveSessionKey(spKeysRaw[i], sessionId, "sp_session");
@@ -192,7 +201,7 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
 
 macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
                                  const std::string& inputPath, const std::string& spHost,
-                                 uint64_t padCmax)
+                                 uint64_t padCmax, bool pqHybrid)
 {
     LOG << "[S" << selfIdx << "] connecting spSock\n";
     coproto::Socket spSock = senderConnect(spHost, basePort + selfIdx);
@@ -241,8 +250,15 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
     co_await spSock.recv(coproto::span<uint8_t>(sessionId.data(), sessionId.size()));
     LOG << "[S" << selfIdx << "] sessionId received; running MpSpHandshake\n";
 
-    auto spKeyRaw = co_await MpSpHandshake::runSender(spSock, selfIdx);
-    LOG << "[S" << selfIdx << "] MpSpHandshake done\n";
+    std::array<uint8_t, 32> spKeyRaw;
+    if (pqHybrid) {
+        volePSI::mpstar::StubKem kem;
+        LOG << "[S" << selfIdx << "] using PQ-hybrid handshake\n";
+        spKeyRaw = co_await MpHybridHandshake::runSender(spSock, selfIdx, kem);
+    } else {
+        spKeyRaw = co_await MpSpHandshake::runSender(spSock, selfIdx);
+    }
+    LOG << "[S" << selfIdx << "] handshake done\n";
     auto spKey = volePSI::mpstar::deriveSessionKey(spKeyRaw, sessionId, "sp_session");
 
     LOG << "[S" << selfIdx << "] parsing CSV " << inputPath << "\n";
@@ -456,6 +472,10 @@ static void printMpsaUsage(std::ostream& os)
         "                hides the exact intersection size from any party\n"
         "                that observes only the output file; SP still learns\n"
         "                C via MPSI itself — see CARDINALITY_HIDING_DESIGN)\n"
+        "    -pq        post-quantum hybrid SP↔sender handshake\n"
+        "               (X25519 + KEM; currently uses StubKem placeholder.\n"
+        "                Real ML-KEM/Kyber-768 swap-in via liboqs documented\n"
+        "                in docs/PQ_HYBRID_HANDSHAKE_DESIGN.md)\n"
         "\n"
         "Examples:\n"
         "  frontend -mpsa -N 3 -r 0\n"
@@ -482,6 +502,7 @@ void doFileMpsa(CLP& cmd)
     int basePort  = cmd.getOr<int>("port", 17500);
     std::string spHost = cmd.getOr<std::string>("host", "localhost");
     uint64_t padCmax = cmd.getOr<uint64_t>("cmax", 0);  // 0 = no padding
+    bool pqHybrid = cmd.isSet("pq");  // post-quantum hybrid handshake (stub KEM in this build)
 
     if (N < 2) {
         printMpsaUsage(std::cerr);
@@ -498,7 +519,7 @@ void doFileMpsa(CLP& cmd)
 
     if (role == 0) {
         std::string out = cmd.getOr<std::string>("out", "out_cleartext.csv");
-        macoro::sync_wait(runSpRole(N, basePort, out, padCmax));
+        macoro::sync_wait(runSpRole(N, basePort, out, padCmax, pqHybrid));
     } else if (role == 1) {
         uint32_t idx = cmd.getOr<uint32_t>("i", 0);
         std::string in = cmd.getOr<std::string>("in", "");
@@ -506,7 +527,7 @@ void doFileMpsa(CLP& cmd)
             printMpsaUsage(std::cerr);
             throw std::runtime_error("MpsaDriver: sender requires -in <csv> and -i in [0, N)");
         }
-        macoro::sync_wait(runSenderRole(N, idx, basePort, in, spHost, padCmax));
+        macoro::sync_wait(runSenderRole(N, idx, basePort, in, spHost, padCmax, pqHybrid));
     } else {
         printMpsaUsage(std::cerr);
         throw std::runtime_error("MpsaDriver: invalid -r role (use 0 for SP, 1 for sender)");
