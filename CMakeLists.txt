@@ -23,6 +23,7 @@ add_subdirectory(frontend)
 option(VOLE_PSI_BUILD_TESTS "Build offline unit tests for MPSA additions" OFF)
 if(VOLE_PSI_BUILD_TESTS)
     add_subdirectory(tests/unit)
+    add_subdirectory(tests/benchmarks)
 endif()
 
 # setup the install

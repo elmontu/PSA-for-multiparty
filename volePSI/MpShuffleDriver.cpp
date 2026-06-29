@@ -146,19 +146,27 @@ macoro::task<std::vector<std::vector<oc::block>>> MpShuffleDriver::runSender(
 {
     if (senderCount < 2)
         throw std::runtime_error("MpShuffleDriver::runSender: senderCount must be >= 2");
-    if (ownMasks.size() != senderCount)
-        throw std::runtime_error("MpShuffleDriver::runSender: ownMasks size mismatch");
+    // colCount is decoupled from senderCount: it is the number of parallel
+    // single-block columns being shuffled, which equals senderCount when
+    // payload width W=1 (the legacy case) but equals senderCount*W when
+    // wide payload is in use (the caller flattens its N senders × W blocks
+    // into N*W cascade columns).
+    const uint32_t colCount = static_cast<uint32_t>(ownMasks.size());
+    if (colCount == 0)
+        throw std::runtime_error("MpShuffleDriver::runSender: ownMasks empty");
+    if (colCount % senderCount != 0)
+        throw std::runtime_error("MpShuffleDriver::runSender: colCount must be multiple of senderCount");
 
-    auto R = std::move(ownMasks);  // N columns
+    auto R = std::move(ownMasks);  // colCount columns
     const size_t c_size = static_cast<size_t>(C);
 
     for (uint32_t k = 0; k < senderCount - 1; ++k) {
         if (k == selfIdx) {
             oc::block seed = deriveRoundSeed(spKey, sessionId, k);
 
-            std::vector<std::vector<oc::block>> R_next(senderCount);
+            std::vector<std::vector<oc::block>> R_next(colCount);
 
-            for (uint32_t col = 0; col < senderCount; ++col) {
+            for (uint32_t col = 0; col < colCount; ++col) {
                 // ---- OSN call A: I'm the OSN SENDER ----
                 OSNSender osnSA;
                 std::map<int, int> i2locA;
@@ -184,9 +192,9 @@ macoro::task<std::vector<std::vector<oc::block>>> MpShuffleDriver::runSender(
             }
 
             R.clear();
-            R.assign(senderCount, std::vector<oc::block>());  // empty per-column
+            R.assign(colCount, std::vector<oc::block>());  // empty per-column
 
-            // Handoff R_next (all N columns) to sender k+1 via peer mesh.
+            // Handoff R_next (all colCount columns) to sender k+1 via peer mesh.
             uint32_t nextIdx = k + 1;
             namespace mp = volePSI::mpstar;
             auto pairKey = mp::deriveSessionKey(setup.key(nextIdx), sessionId, "pair_session");
@@ -199,7 +207,7 @@ macoro::task<std::vector<std::vector<oc::block>>> MpShuffleDriver::runSender(
             auto pairKey = mp::deriveSessionKey(setup.key(k), sessionId, "pair_session");
             auto ct = co_await chan.recvFrom(k);
             auto plain = mp::aeadDecrypt(ct, pairKey);
-            R = deserializeColumns(plain, senderCount, C);
+            R = deserializeColumns(plain, colCount, C);
         }
         // else: idle this round
     }
@@ -228,8 +236,11 @@ macoro::task<std::vector<std::vector<oc::block>>> MpShuffleDriver::runSp(
         throw std::runtime_error("MpShuffleDriver::runSp: osnSocks size mismatch");
     if (spKeys.size() != senderCount)
         throw std::runtime_error("MpShuffleDriver::runSp: spKeys size mismatch");
-    if (initialMasked.size() != senderCount)
-        throw std::runtime_error("MpShuffleDriver::runSp: initialMasked size mismatch");
+    const uint32_t colCount = static_cast<uint32_t>(initialMasked.size());
+    if (colCount == 0)
+        throw std::runtime_error("MpShuffleDriver::runSp: initialMasked empty");
+    if (colCount % senderCount != 0)
+        throw std::runtime_error("MpShuffleDriver::runSp: colCount must be multiple of senderCount");
 
     auto M = std::move(initialMasked);
     const size_t c_size = static_cast<size_t>(C);
@@ -237,9 +248,9 @@ macoro::task<std::vector<std::vector<oc::block>>> MpShuffleDriver::runSp(
     for (uint32_t k = 0; k < senderCount - 1u; ++k) {
         oc::block seed = deriveRoundSeed(spKeys[k], sessionId, k);
 
-        std::vector<std::vector<oc::block>> M_next(senderCount);
+        std::vector<std::vector<oc::block>> M_next(colCount);
 
-        for (uint32_t col = 0; col < senderCount; ++col) {
+        for (uint32_t col = 0; col < colCount; ++col) {
             // ---- OSN call A: I'm the OSN RECEIVER providing M[col] ----
             OSNReceiver osnRA;
             osnRA.init(c_size, 1);
@@ -266,12 +277,13 @@ macoro::task<std::vector<std::vector<oc::block>>> MpShuffleDriver::runSp(
         M = std::move(M_next);
     }
 
-    // Final reveal: receive N R columns from the last sender, AEAD-verified.
-    auto finalR = co_await recvColumnsAead(revealSocket, senderCount, C,
+    // Final reveal: receive all colCount R columns from the last sender,
+    // AEAD-verified.
+    auto finalR = co_await recvColumnsAead(revealSocket, colCount, C,
                                            spKeys[senderCount - 1]);
 
-    std::vector<std::vector<oc::block>> table(senderCount);
-    for (uint32_t col = 0; col < senderCount; ++col) {
+    std::vector<std::vector<oc::block>> table(colCount);
+    for (uint32_t col = 0; col < colCount; ++col) {
         table[col].resize(c_size);
         for (size_t i = 0; i < c_size; ++i)
             table[col][i] = M[col][i] ^ finalR[col][i];

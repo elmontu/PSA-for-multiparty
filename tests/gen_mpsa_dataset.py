@@ -19,7 +19,12 @@ def main():
                         help="Rows sharing the same ID across all senders")
     parser.add_argument("--outdir", type=str, required=True, help="Output directory")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--W", type=int, default=1,
+                        help="Payload width in 16B blocks per row (default 1). "
+                             "Each block becomes a separate CSV column, total cols = 1+W.")
     args = parser.parse_args()
+    if args.W < 1:
+        sys.exit(f"--W must be >= 1, got {args.W}")
 
     if args.intersect > args.total:
         sys.exit(f"intersect ({args.intersect}) cannot exceed total ({args.total})")
@@ -37,12 +42,18 @@ def main():
 
     all_unique_ids = set()
 
+    def payload_cols(sender_idx, row_idx):
+        # W comma-separated payload tokens. Each becomes one 16B block after
+        # the CSV parser hashes via stringToHex/hexToBlock. We keep them
+        # distinct per (sender, row, block_index) so intersection rows can be
+        # reconstructed unambiguously when checking results.
+        return ",".join(f"v{sender_idx}_{row_idx}_b{w}" for w in range(args.W))
+
     for i in range(args.N):
         filepath = os.path.join(args.outdir, f"sender_{i}.csv")
         with open(filepath, "w") as f:
             for j, uid in enumerate(intersect_ids):
-                payload = f"val{i}_{j}"
-                f.write(f"{uid},{payload}\n")
+                f.write(f"{uid},{payload_cols(i, j)}\n")
 
             for k in range(args.total - args.intersect):
                 while True:
@@ -50,10 +61,10 @@ def main():
                     if uid not in intersect_set and uid not in all_unique_ids:
                         break
                 all_unique_ids.add(uid)
-                payload = f"val{i}_{args.intersect + k}"
-                f.write(f"{uid},{payload}\n")
+                f.write(f"{uid},{payload_cols(i, args.intersect + k)}\n")
 
-    print(f"Wrote {args.N} files to {args.outdir}; intersection size = {args.intersect}")
+    print(f"Wrote {args.N} files to {args.outdir}; "
+          f"intersection size = {args.intersect}; W = {args.W}")
 
 
 if __name__ == "__main__":

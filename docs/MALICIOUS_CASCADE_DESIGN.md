@@ -106,17 +106,50 @@ per check.
 
 ## Subtask decomposition (for the implementer)
 
-| # | Task | Effort | Files |
-|---|---|---|---|
-| 1 | Add `mpstar::gfMul(a, b)` helper wrapping `oc::block` PCLMUL multiplication | ½ day | `MpStarCrypto.{h,cpp}` |
-| 2 | Add per-round MAC-key derivation `deriveMacKey(spKey_k, sessionId, k)` | ¼ day | `MpStarCrypto.{h,cpp}` |
-| 3 | Extend MpShuffleDriver state from `vector<vector<block>>` to a struct `AuthShare { data, tag }` | 1 day | `MpShuffleDriver.{h,cpp}` |
-| 4 | Refactor cascade round to do OSN-twice (data and tag) with the same `init_wj_seeded(seed_k)` | 1 day | `MpShuffleDriver.cpp` |
-| 5 | Phase 0 mask aggregation: each sender locally computes `r_i_tag = α_self · r_i`, sender 0 collects and verifies under commit-and-open | ½ day | `MpsaDriver.cpp` |
-| 6 | Final verification: α_k broadcast + batched linear-combination MAC check | 1 day | `MpsaDriver.cpp` |
-| 7 | Tests: malicious adversary simulator that tampers with `R_k` mid-round; assert protocol aborts with correct attribution | 1 day | `tests/unit/` |
+| # | Task | Effort | Files | R25 Status |
+|---|---|---|---|---|
+| 1 | GF(2^128) multiplication primitive | ½ day | `cryptoTools/Common/block.h` | **DONE upstream** — `oc::block::gf128Mul` already ships with PCLMUL/PMULL/portable variants. No wrapper needed. |
+| 2 | Per-round MAC-key derivation `deriveMacKey(spKey, sessionId, k)` | ¼ day | `MpAuthCascade.{h,cpp}` | **DONE.** Implemented over the existing `deriveSessionKey("mac_round_<k>")` path. |
+| 3 | `AuthShare { data, tag }` + algebra (XOR, perm, const-injection, batched random-LC verify) | 1 day | `MpMac.{h,cpp}` | **DONE.** 10/10 unit tests in `tests/unit/test_mac.cpp`. |
+| 4 | Refactor cascade round to OSN-quadruple with shared `init_wj_seeded(seed_k)` | 1 day | `MpShuffleDriver.cpp` | **In-memory simulation DONE** (`MpAuthCascade.{h,cpp}`, 4/4 tests). Live wire-protocol port deferred — see "Deferred" below. |
+| 5 | Phase 0 mask aggregation with MACs + commit-and-open | ½ day | `MpsaDriver.cpp` | Deferred — waits for #4 live integration. |
+| 6 | Final verification: α_k broadcast + batched linear-combination MAC check | 1 day | `MpsaDriver.cpp` | **Primitive DONE** (`verifyAuthSharesBatched`). End-to-end wiring deferred with #5. |
+| 7 | Adversary-simulation tests | 1 day | `tests/unit/test_auth_cascade.cpp` | **DONE** for in-memory model (tamper-at-handoff and tamper-at-final-reveal both caught). Live-protocol variant deferred with #4. |
 
-**Total: ~5 days of focused work.** All bounded; uses existing primitives.
+**Status: subtasks 1, 2, 3, 7 fully delivered; 4, 5, 6 hold their algebra
+primitives but defer the wire-level integration into MpShuffleDriver /
+MpsaDriver.**
+
+## Deferred: live-protocol port + the OLE gap
+
+R25 intentionally stops at the in-memory simulation for one reason: the
+MAC key `α_k` in the current construction is a **shared secret** between
+SP and active sender `S_k` (both derive it from their pairwise X25519
+session key). This catches:
+
+- Network attackers tampering with messages in flight.
+- A sender lying about state it hands off to a NON-cooperating party
+  (the next round's `verifyAuthShares` catches it before any further
+  state evolves).
+- A malicious sender deviating in a round in which it is *not* the active
+  driver (cannot forge `α_k` it does not know).
+
+It **does NOT** catch SP-vs-active-sender collusion in round `k`: both
+parties locally hold `α_k`, so either can produce a `α_k`-consistent
+forgery if they choose to.
+
+Closing this gap requires **OLE-based α-sharing** (SPDZ-style additively
+shared global MAC key `Δ`, never reconstructed until the end). Within
+volePSI this is a natural extension of `RsMpsiVole` adding a triple-
+generation phase, roughly +1000 LoC of OT plumbing. R28 (proposed)
+covers it.
+
+Porting the in-memory `cascadeRound` into `MpShuffleDriver` *before* OLE
+is added would produce a transitional half-step: doubled OSN cost (4N
+calls per round vs 2N today) for security that is only marginally
+stronger than the AEAD already deployed. The integration is held until
+the OLE substrate is in place so the upgrade goes straight to full SPDZ-
+level security.
 
 ## Security argument sketch
 

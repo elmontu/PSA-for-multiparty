@@ -220,7 +220,7 @@ Per-protocol keys are ephemeral (forward-secret). Hybrid security: session key s
 - **Round 16 (DONE)**: Phase 0 commit-and-open + full malicious cascade design doc.
 - **Round 17 (DONE)**: Cardinality-hiding via output padding + full design doc covering SP-side hiding.
 - **Round 18 (DONE)**: PQ-hybrid handshake framework + StubKem + full real-KEM swap-in spec.
-- **Round 19**: Security analysis writeup (`docs/SECURITY_ANALYSIS.md`) + composition with FL downstream.
+- **Round 19 (DONE)**: `docs/SECURITY_ANALYSIS.md` — capstone synthesizing the threat model across all layers + composition with downstream FL training + Singapore-government compliance posture mapping.
 
 ## What's still genuinely open (post-Round 16)
 

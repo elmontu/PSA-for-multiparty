@@ -1,3 +1,4 @@
-out/**/* 
-dataset/out_*.csv
-.vscode/**/* 
+out/**/*
+dataset/
+dataset_*/
+.vscode/**/*

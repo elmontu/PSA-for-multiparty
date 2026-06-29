@@ -62,6 +62,34 @@ What's added:
 
 CSV format is unchanged: column 1 = ID, column 2 = payload.
 
+**Output:** SP writes `out_mpsa.csv` with one row per intersection element,
+N comma-separated hex-encoded payload blocks per row (one column per
+sender, all shuffled by the same secret permutation).
+
+### Privacy / hardening flags
+
+```
+-pq                  hybrid X25519 + KEM handshake (HNDL-resistant; StubKem
+                     placeholder in this build, real ML-KEM-768 swap-in
+                     documented in docs/PQ_HYBRID_HANDSHAKE_DESIGN.md)
+-cmax <N>            pad output to >= N rows with PRNG dummies
+                     (hides exact |I| from output-file observers)
+-mink <K>            threshold-k revelation: SP aborts if |I| < K
+                     (k-anonymity-style compliance policy)
+-dp <epsilon>        DP-protected cardinality release: SP logs
+                     C̃ = C + Laplace(1/epsilon); real C kept internal
+-v                   verbose per-step debug logs to stderr
+```
+
+Combined example (regulated-deployment tier):
+
+```bash
+frontend -mpsa -N 3 -r 0 -pq -cmax 1024 -mink 50 -dp 0.5 -out result.csv
+```
+
+See `docs/SECURITY_ANALYSIS.md` for the threat model across all layers
+and `docs/DEFERRED_AUDITS.md` for the per-round audit log.
+
 ### Smoke test
 
 ```bash
