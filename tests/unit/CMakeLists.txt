@@ -132,3 +132,27 @@ target_include_directories(test_ole_triple PRIVATE
     ${CMAKE_SOURCE_DIR}
     ${SODIUM_INCLUDE_DIRS}
 )
+
+# R34k-remain: 2-party wire MPC primitives (secureAnd/OR/LT/Equal over wire).
+add_executable(test_mpc_wire test_mpc_wire.cpp)
+target_link_libraries(test_mpc_wire PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpc_wire PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# R28: OLE-based α-sharing for malicious cascade.
+add_executable(test_ole_alpha test_ole_alpha.cpp)
+target_link_libraries(test_ole_alpha PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_ole_alpha PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# R27b: Bayer-Groth multiplicative shuffle NIZK.
+add_executable(test_shuffle_nizk_bg test_shuffle_nizk_bg.cpp)
+target_link_libraries(test_shuffle_nizk_bg PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_shuffle_nizk_bg PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
