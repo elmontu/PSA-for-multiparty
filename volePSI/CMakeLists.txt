@@ -30,6 +30,7 @@ set(SRCS
     "MpMpcWire.cpp"
     "MpOleAlpha.cpp"
     "MpShuffleNizkBg.cpp"
+    "MpMpcWireOps.cpp"
     "MpShuffleDriver.cpp"
     "RsMpsi.cpp"
     "RsMpsiVole.cpp"

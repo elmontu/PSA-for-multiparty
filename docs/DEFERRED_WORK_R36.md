@@ -5,19 +5,32 @@ the deferred items from R25-R35) and what remained partial.
 
 ## Delivered
 
-### R34k-remain — Wire MPC primitives
+### R34k-remain — Wire MPC primitives [VALIDATED]
 - `volePSI/MpMpcWire.{h,cpp}`: 2-party wire-protocol versions of
   secureAnd, secureOr, secureLessThan (256 triples), secureEqual (63
-  triples), with the same bit-by-bit LT circuit as the in-memory R34d.
-- The primitives are algorithmically correct and use the same coproto
-  send/recv pattern as the proven-working `MpOleTriple`.
-- TEST STATUS: `tests/unit/test_mpc_wire.cpp` SKIPPED (exit 77).
-  `coproto::LocalAsyncSocket` deadlocks on tiny (1-2 byte) exchanges
-  even with explicit `flush()`. The larger block-vector exchanges
-  inside `SilentOtTriple::expand` work fine. The fix is one of:
-  (a) batch many opens into a single block-size message, or
-  (b) test against an `AsioSocket` TCP pair instead of LocalAsyncSocket.
-  Either is straightforward but was outside this session's budget.
+  triples), with the same bit-by-bit LT circuit as in-memory R34d.
+- Same coproto send/recv pattern as `MpOleTriple`.
+- TEST STATUS [R36b update]: now PASSING. The deadlock was
+  `LocalAsyncSocket`'s rendezvous semantics — both peers doing send→recv
+  blocks. Fix in R36b: asymmetric ordering by partyIdx (party 0 does
+  send-then-recv, party 1 does recv-then-send). Tests: 6/6 PASS
+  including ole_triples_drive_wire_and which validates OLE-generated
+  triples drive the wire primitives correctly.
+
+### R36b — Wire MPC composition [DELIVERED]
+- `volePSI/MpMpcWireOps.{h,cpp}` builds on R34k-remain primitives:
+  - `wireConditionalSwap`: bit-by-bit XOR + secureAnd. Cost: 64 + payloadBits triples per swap.
+  - `wireMpcBitonicSort`: bitonic network over the wire. Cost:
+    bitonicCompareSwapCount(n) × (256 + 64 + payloadBits) triples.
+  - `wireMpcCrossProductExpand`: cross-product enumeration with
+    is_intersection AND-chain via wireSecureAndT. Cost: |windows| × M^N × (N-1).
+  - `wireMpcFilterIntersection`: encode rows → WireSortElement, sort by
+    derived rank, decode back.
+- TEST STATUS: 5/5 PASS for the wire MPC ops; combined with R34k-remain
+  primitives (6/6) the wire MPC stack is complete except for the
+  end-to-end `wireMpcExecutePrivateJoin` driver and a CLI mode.
+- Remaining ~300 LoC: wire end-to-end driver (composition of the above)
+  + `-mpsa-join-mpc-wire` CLI flag + wire smoke test.
 
 ### R28 — OLE-based α-sharing for malicious cascade
 - `volePSI/MpOleAlpha.{h,cpp}` + `tests/unit/test_ole_alpha.cpp` (6/6 PASS).

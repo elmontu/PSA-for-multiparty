@@ -270,14 +270,10 @@ bool test_ole_triples_drive_wire_and() {
 // Both are followups; see docs/MPC_WIRE_DESIGN.md.
 
 int main() {
-    std::cout << "test_mpc_wire SKIPPED (coproto LocalAsyncSocket buffering "
-              << "issue with tiny exchanges; primitives in MpMpcWire.{h,cpp} "
-              << "are algorithmically validated, see ole_triple_drives_secureAnd)\n";
-    return 77;  // POSIX convention for "skipped"
-
-    // The tests below remain in source for when the socket issue is
-    // resolved.
-    [[maybe_unused]] const std::vector<std::pair<std::string, std::function<bool()>>> tests = {
+    // R36 socket-fix: LocalAsyncSocket rendezvous semantics required
+    // asymmetric send/recv ordering by partyIdx. With that fix the wire
+    // primitives test end-to-end.
+    const std::vector<std::pair<std::string, std::function<bool()>>> tests = {
         {"wire_open_bit",                       test_wire_open_bit},
         {"wire_secure_and_truth_table",         test_wire_secure_and_truth_table},
         {"wire_secure_or_truth_table",          test_wire_secure_or_truth_table},

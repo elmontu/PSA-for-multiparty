@@ -22,15 +22,19 @@ macoro::task<uint8_t> wireOpenBit(
     coproto::Socket& sock)
 {
     requireParty01(partyIdx, "wireOpenBit");
-    // Use std::array for the send/recv buffer — matches the existing
-    // coproto pattern used by MpsaDriver / MpSpHandshake / MpOleTriple.
-    // Bare POD send/recv via template-deduced Container has edge cases
-    // (rvalue lifetime + buffering) that can deadlock LocalAsyncSocket.
+    // LocalAsyncSocket (and most rendezvous-semantic sockets) require
+    // asymmetric ordering to avoid deadlock when both peers send-then-
+    // recv: party 0 sends first then recvs; party 1 recvs first then
+    // sends. The protocol semantics are identical in both orderings.
     std::array<uint8_t, 1> mine = {myShare};
     std::array<uint8_t, 1> theirs = {0};
-    co_await sock.send(mine);
-    co_await sock.flush();   // small payload — coproto buffers; flush to actually transmit
-    co_await sock.recv(theirs);
+    if (partyIdx == 0) {
+        co_await sock.send(mine);
+        co_await sock.recv(theirs);
+    } else {
+        co_await sock.recv(theirs);
+        co_await sock.send(mine);
+    }
     co_return static_cast<uint8_t>((myShare ^ theirs[0]) & 1);
 }
 
@@ -53,9 +57,13 @@ macoro::task<uint8_t> wireSecureAnd(
     uint8_t myE = static_cast<uint8_t>((myY ^ myTripleV) & 1);
     std::array<uint8_t, 2> myPair = {myD, myE};
     std::array<uint8_t, 2> theirPair = {0, 0};
-    co_await sock.send(myPair);
-    co_await sock.flush();   // small payload; flush to actually transmit
-    co_await sock.recv(theirPair);
+    if (partyIdx == 0) {
+        co_await sock.send(myPair);
+        co_await sock.recv(theirPair);
+    } else {
+        co_await sock.recv(theirPair);
+        co_await sock.send(myPair);
+    }
     uint8_t d = static_cast<uint8_t>((myD ^ theirPair[0]) & 1);
     uint8_t e = static_cast<uint8_t>((myE ^ theirPair[1]) & 1);
 
