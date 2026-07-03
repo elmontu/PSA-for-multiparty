@@ -2,3 +2,5 @@ out/**/*
 dataset/
 dataset_*/
 .vscode/**/*
+__pycache__/
+*.pyc
