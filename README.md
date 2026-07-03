@@ -426,11 +426,6 @@ doi = {10.48550/arXiv.2410.04746}
 
 This project is licensed under the MIT License. See the `LICENSE` file for details.
 
-## Authors
+## Author
 
-- **Jiabo Wang**
-- **Federico Giorgio Pfahler**
 - **Elmo Xuyun Huang**
-- **Pu Duan**
-- **Huaxiong Wang**
-- **Kwok-Yan Lam**
