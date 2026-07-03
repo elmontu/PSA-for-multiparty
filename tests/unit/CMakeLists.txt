@@ -164,3 +164,11 @@ target_include_directories(test_mpc_wire_ops PRIVATE
     ${CMAKE_SOURCE_DIR}
     ${SODIUM_INCLUDE_DIRS}
 )
+
+# R36c: end-to-end wire MPC join driver.
+add_executable(test_mpc_wire_driver test_mpc_wire_driver.cpp)
+target_link_libraries(test_mpc_wire_driver PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpc_wire_driver PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
