@@ -60,37 +60,28 @@ void unpackBlocksToTriples(
 
 } // namespace
 
-macoro::task<std::vector<BeaverTripleBit>> oleGenerateTriples(
+namespace {
+
+// Shared implementation for semi-honest + malicious variants; parameter
+// picks the SilentSecType.
+macoro::task<std::vector<BeaverTripleBit>> oleGenerateTriplesImpl(
     uint64_t partyIdx,
     size_t count,
     oc::PRNG& prng,
-    coproto::Socket& sock)
+    coproto::Socket& sock,
+    osuCrypto::SilentSecType secType)
 {
     if (partyIdx > 1)
         throw std::runtime_error("oleGenerateTriples: partyIdx must be 0 or 1");
 
-    // SilentOtTriple sizing matches the libOTe internal test
-    // (SilentOT_Tests.cpp::SilentOtTriple_triple_test): mN = number of
-    // triples directly, with A/B/C span size = divCeil(mN, 128). Each
-    // block carries 128 triples bit-by-bit.
-    //
-    // libOTe has a MINIMUM-SIZE constraint internally (the silent OT
-    // setup needs at least a few hundred OTs to function); for tiny
-    // counts we round up.
-    const size_t minTriples = 256;   // empirical minimum from libOTe tests
+    const size_t minTriples = 256;
     const size_t mN = std::max<size_t>(count, minTriples);
     const size_t blocks = (mN + 127) / 128;
 
     osuCrypto::SilentOtTriple triple;
-    triple.init(partyIdx, mN,
-                osuCrypto::SilentSecType::SemiHonest,
-                osuCrypto::SilentOtTriple::Type::Triple);
-
-    // Generate base OTs over the same socket. This is a separate
-    // sub-protocol within libOTe.
+    triple.init(partyIdx, mN, secType, osuCrypto::SilentOtTriple::Type::Triple);
     co_await triple.genBaseOts(prng, sock);
 
-    // Allocate the per-party share buffers and run expand().
     std::vector<oc::block> A(blocks), B(blocks), C(blocks);
     co_await triple.expand(
         osuCrypto::span<oc::block>(A.data(), A.size()),
@@ -101,6 +92,104 @@ macoro::task<std::vector<BeaverTripleBit>> oleGenerateTriples(
     std::vector<BeaverTripleBit> out;
     unpackBlocksToTriples(partyIdx, A, B, C, count, out);
     co_return out;
+}
+
+} // namespace
+
+macoro::task<std::vector<BeaverTripleBit>> oleGenerateTriples(
+    uint64_t partyIdx,
+    size_t count,
+    oc::PRNG& prng,
+    coproto::Socket& sock)
+{
+    co_return co_await oleGenerateTriplesImpl(
+        partyIdx, count, prng, sock,
+        osuCrypto::SilentSecType::SemiHonest);
+}
+
+macoro::task<std::vector<BeaverTripleBit>> oleGenerateTriplesMalicious(
+    uint64_t partyIdx,
+    size_t count,
+    oc::PRNG& prng,
+    coproto::Socket& sock)
+{
+    co_return co_await oleGenerateTriplesImpl(
+        partyIdx, count, prng, sock,
+        osuCrypto::SilentSecType::Malicious);
+}
+
+macoro::task<std::vector<BeaverTripleBit>> oleGenerateTriplesNParty(
+    uint64_t partyIdx,
+    uint32_t N,
+    size_t count,
+    oc::PRNG& prng,
+    std::vector<coproto::Socket>& sockets)
+{
+    if (N < 2)
+        throw std::runtime_error("oleGenerateTriplesNParty: N must be >= 2");
+    if (partyIdx >= N)
+        throw std::runtime_error("oleGenerateTriplesNParty: partyIdx OOB");
+    if (sockets.size() != N)
+        throw std::runtime_error("oleGenerateTriplesNParty: sockets size != N");
+
+    // Pairwise pattern (hub-and-spoke variant): party 0 is the hub and
+    // runs an OLE with every other party. Non-hub parties only OLE with
+    // party 0. Their per-triple shares get combined at party 0.
+    //
+    // Each pair produces N=2 triples (my share + peer share). We need to
+    // OUTPUT N-party BeaverTripleBits where the shares.size() == N.
+    //
+    // Simplest folding for the hub (party 0):
+    //   Sum triple shares from each pair (0, k). The invariant
+    //     (u_0 XOR ... XOR u_{N-1}) AND (v_0 XOR ... XOR v_{N-1}) == (w_0 XOR ...)
+    //   is NOT preserved by pairwise triples directly (cross terms) —
+    //   this MVP N-party generation is APPROXIMATE and used only for
+    //   protocol-scaffolding tests. A true N-party OLE needs a native
+    //   silent OT extension for N-way; documented as R37/N-native.
+    //
+    // For 2-party (N==2) we fall through to the plain oleGenerateTriples
+    // for correctness.
+    if (N == 2) {
+        // Non-hub / hub distinction reduces to partyIdx.
+        uint64_t peer = 1 - partyIdx;
+        auto triples = co_await oleGenerateTriples(partyIdx, count, prng, sockets[peer]);
+        co_return triples;
+    }
+
+    // N > 2: run pairwise OLEs to demonstrate the wire protocol, but
+    // return triples with N slots (only 2 populated per call — the rest
+    // are held by parties that aren't in this pair). This is
+    // scaffolding only; test asserts the STRUCTURE, not full N-party
+    // triple validity. See docs/MPC_WIRE_DESIGN.md for the native
+    // N-party path.
+    std::vector<BeaverTripleBit> combined(count);
+    for (size_t i = 0; i < count; ++i) {
+        combined[i].u = SharedBit(N);
+        combined[i].v = SharedBit(N);
+        combined[i].w = SharedBit(N);
+    }
+
+    if (partyIdx == 0) {
+        // Hub: OLE with each other party. Each pair contributes a share
+        // that we XOR into our slot.
+        for (uint32_t k = 1; k < N; ++k) {
+            auto pair = co_await oleGenerateTriples(0, count, prng, sockets[k]);
+            for (size_t i = 0; i < count; ++i) {
+                combined[i].u.shares[0] ^= pair[i].u.shares[0];
+                combined[i].v.shares[0] ^= pair[i].v.shares[0];
+                combined[i].w.shares[0] ^= pair[i].w.shares[0];
+            }
+        }
+    } else {
+        // Non-hub: single OLE with hub. Store peer share in our slot.
+        auto pair = co_await oleGenerateTriples(1, count, prng, sockets[0]);
+        for (size_t i = 0; i < count; ++i) {
+            combined[i].u.shares[partyIdx] = pair[i].u.shares[1];
+            combined[i].v.shares[partyIdx] = pair[i].v.shares[1];
+            combined[i].w.shares[partyIdx] = pair[i].w.shares[1];
+        }
+    }
+    co_return combined;
 }
 
 bool verifyBeaverTripleBatch(const std::vector<BeaverTripleBit>& triples)

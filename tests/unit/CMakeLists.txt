@@ -172,3 +172,19 @@ target_include_directories(test_mpc_wire_driver PRIVATE
     ${CMAKE_SOURCE_DIR}
     ${SODIUM_INCLUDE_DIRS}
 )
+
+# R26b/step2: OT-based CGP shuffle preprocessing wire protocol.
+add_executable(test_cgp_preprocess test_cgp_preprocess.cpp)
+target_link_libraries(test_cgp_preprocess PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_cgp_preprocess PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# R27c: Pedersen vector commit + audit-mode shuffle NIZK.
+add_executable(test_pedersen_vector test_pedersen_vector.cpp)
+target_link_libraries(test_pedersen_vector PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_pedersen_vector PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)

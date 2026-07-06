@@ -1,6 +1,8 @@
 #include "MpOleAlpha.h"
 
+#include <array>
 #include <cstring>
+#include <stdexcept>
 
 namespace volePSI {
 namespace mpstar {
@@ -160,6 +162,71 @@ bool macCheckBatched(
     }
     oc::block expected = jointAlpha.gf128Mul(accData);
     return ctEqBlocks(accTag, expected) == 0;
+}
+
+macoro::task<OleGf128CorrelationOverWire> oleGf128OverWire(
+    uint64_t partyIdx,
+    oc::block myInputValue,
+    oc::PRNG& prng,
+    coproto::Socket& sock)
+{
+    if (partyIdx > 1)
+        throw std::runtime_error("oleGf128OverWire: partyIdx must be 0 or 1");
+    (void)prng;
+
+    // Handshake: XOR of contributions gives a random shared seed.
+    std::array<uint8_t, 16> mineBytes;
+    oc::PRNG local;
+    local.SetSeed(oc::sysRandomSeed());
+    oc::block myRnd = local.get<oc::block>();
+    std::memcpy(mineBytes.data(), &myRnd, 16);
+    std::array<uint8_t, 16> peerBytes{};
+    if (partyIdx == 0) {
+        co_await sock.send(mineBytes);
+        co_await sock.recv(peerBytes);
+    } else {
+        co_await sock.recv(peerBytes);
+        co_await sock.send(mineBytes);
+    }
+    oc::block sharedSeed;
+    auto* ps = reinterpret_cast<uint8_t*>(&sharedSeed);
+    auto* pm = reinterpret_cast<uint8_t*>(&myRnd);
+    for (int i = 0; i < 16; ++i) ps[i] = pm[i] ^ peerBytes[i];
+
+    // Exchange the input values so BOTH parties can derive the same
+    // correlation deterministically. This IS the scaffolding-not-secure
+    // step (leaks inputs to peer). The libOTe SilentVole substitution
+    // hides them.
+    std::array<uint8_t, 16> myInputBytes;
+    std::memcpy(myInputBytes.data(), &myInputValue, 16);
+    std::array<uint8_t, 16> peerInputBytes{};
+    if (partyIdx == 0) {
+        co_await sock.send(myInputBytes);
+        co_await sock.recv(peerInputBytes);
+    } else {
+        co_await sock.recv(peerInputBytes);
+        co_await sock.send(myInputBytes);
+    }
+    oc::block peerInput;
+    std::memcpy(&peerInput, peerInputBytes.data(), 16);
+
+    // Both parties now know (alphaA=party0input, b=party1input).
+    // Derive the correlation with a shared PRNG.
+    oc::PRNG sharedPrng;
+    sharedPrng.SetSeed(sharedSeed);
+    oc::block alphaA = (partyIdx == 0) ? myInputValue : peerInput;
+    oc::block bB     = (partyIdx == 1) ? myInputValue : peerInput;
+    auto ole = dealerOleGf128(alphaA, bB, sharedPrng);
+
+    OleGf128CorrelationOverWire out;
+    if (partyIdx == 0) {
+        out.myValue = ole.forPartyA.myValue;
+        out.myMask  = ole.forPartyA.myMask;
+    } else {
+        out.myValue = ole.forPartyB.myValue;
+        out.myMask  = ole.forPartyB.myMask;
+    }
+    co_return out;
 }
 
 } // namespace mpstar

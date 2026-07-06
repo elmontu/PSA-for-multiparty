@@ -167,13 +167,38 @@ bool test_ole_triple_drives_secureAnd() {
 
 // --------------------------------------------------------------
 
+// R37: malicious-secure variant regression.
+bool test_ole_triple_malicious_invariant() {
+    const size_t count = 128;
+    auto socks = coproto::LocalAsyncSocket::makePair();
+    auto party0 = [&]() -> macoro::task<std::vector<mp::BeaverTripleBit>> {
+        oc::PRNG p0 = makePrng(0x71);
+        auto t = co_await mp::oleGenerateTriplesMalicious(0, count, p0, socks[0]);
+        co_await socks[0].flush();
+        co_return t;
+    };
+    auto party1 = [&]() -> macoro::task<std::vector<mp::BeaverTripleBit>> {
+        oc::PRNG p1 = makePrng(0x72);
+        auto t = co_await mp::oleGenerateTriplesMalicious(1, count, p1, socks[1]);
+        co_await socks[1].flush();
+        co_return t;
+    };
+    auto r = macoro::sync_wait(macoro::when_all_ready(party0(), party1()));
+    auto t0 = std::move(std::get<0>(r)).result();
+    auto t1 = std::move(std::get<1>(r)).result();
+    if (t0.size() != count || t1.size() != count) return false;
+    auto merged = mergeBatches(t0, t1);
+    return mp::verifyBeaverTripleBatch(merged);
+}
+
 int main() {
     const std::vector<std::pair<std::string, std::function<bool()>>> tests = {
-        {"ole_triple_basic_invariant",   test_ole_triple_basic_invariant},
-        {"ole_triple_uneven_count",      test_ole_triple_uneven_count},
-        {"ole_triple_larger_batch",      test_ole_triple_larger_batch},
-        {"ole_triple_shares_random",     test_ole_triple_shares_random},
-        {"ole_triple_drives_secureAnd",  test_ole_triple_drives_secureAnd},
+        {"ole_triple_basic_invariant",       test_ole_triple_basic_invariant},
+        {"ole_triple_uneven_count",          test_ole_triple_uneven_count},
+        {"ole_triple_larger_batch",          test_ole_triple_larger_batch},
+        {"ole_triple_shares_random",         test_ole_triple_shares_random},
+        {"ole_triple_drives_secureAnd",      test_ole_triple_drives_secureAnd},
+        {"ole_triple_malicious_invariant",   test_ole_triple_malicious_invariant},
     };
 
     int failures = 0;

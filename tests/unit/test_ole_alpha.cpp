@@ -3,6 +3,11 @@
 #include "volePSI/MpOleAlpha.h"
 #include "cryptoTools/Crypto/PRNG.h"
 
+#include "coproto/Socket/LocalAsyncSock.h"
+#include "macoro/sync_wait.h"
+#include "macoro/when_all.h"
+#include "macoro/task.h"
+
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -181,6 +186,32 @@ bool test_mac_check_batched_rejects_tampered() {
 
 // --------------------------------------------------------------
 
+// R37: wire-protocol OLE — verify the invariant alphaA · bB == a XOR c
+// where a is party 0's output mask, c is party 1's output mask.
+bool test_ole_gf128_over_wire_invariant() {
+    auto prng = makePrng(0x50);
+    block alphaA = prng.get<block>();
+    block bB     = prng.get<block>();
+
+    auto socks = coproto::LocalAsyncSocket::makePair();
+    auto p0 = [&]() -> macoro::task<mp::OleGf128CorrelationOverWire> {
+        oc::PRNG p; p.SetSeed(oc::sysRandomSeed());
+        co_return co_await mp::oleGf128OverWire(0, alphaA, p, socks[0]);
+    };
+    auto p1 = [&]() -> macoro::task<mp::OleGf128CorrelationOverWire> {
+        oc::PRNG p; p.SetSeed(oc::sysRandomSeed());
+        co_return co_await mp::oleGf128OverWire(1, bB, p, socks[1]);
+    };
+    auto r = macoro::sync_wait(macoro::when_all_ready(p0(), p1()));
+    auto p0r = std::move(std::get<0>(r)).result();
+    auto p1r = std::move(std::get<1>(r)).result();
+
+    block lhs = alphaA.gf128Mul(bB);
+    block rhs = xorBlocks(p0r.myMask, p1r.myMask);
+    if (!(p0r.myValue == alphaA) || !(p1r.myValue == bB)) return false;
+    return lhs == rhs;
+}
+
 int main() {
     const std::vector<std::pair<std::string, std::function<bool()>>> tests = {
         {"ole_correlation_invariant",            test_ole_correlation_invariant},
@@ -189,6 +220,7 @@ int main() {
         {"verifyAuthBatchJoint_rejects_tampered", test_verifyAuthBatchJoint_rejects_tampered},
         {"mac_check_batched_accepts_honest",     test_mac_check_batched_accepts_honest},
         {"mac_check_batched_rejects_tampered",   test_mac_check_batched_rejects_tampered},
+        {"ole_gf128_over_wire_invariant",        test_ole_gf128_over_wire_invariant},
     };
     int failures = 0;
     for (const auto& [name, fn] : tests) {

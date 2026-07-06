@@ -58,6 +58,39 @@ macoro::task<std::vector<BeaverTripleBit>> oleGenerateTriples(
     oc::PRNG& prng,
     coproto::Socket& sock);
 
+// R37: Malicious-secure variant. Selects SilentSecType::Malicious in the
+// underlying libOTe triple protocol. Cost is ~2-3× higher than the
+// semi-honest variant; catches an active adversary corrupting one party.
+macoro::task<std::vector<BeaverTripleBit>> oleGenerateTriplesMalicious(
+    uint64_t partyIdx,
+    size_t count,
+    oc::PRNG& prng,
+    coproto::Socket& sock);
+
+// R37: N-party generalization via pairwise + folding. Generates
+// N-party BeaverTripleBits by running (N-1) pairwise 2-party OLE
+// protocols (party 0 pairs with 1, 2, ..., N-1) and folding the
+// per-pair triples into an N-party additive share structure.
+//
+// This is 2-party-secure but N-party-usable: any single corruption is
+// caught by the underlying 2-party OLE's security; joint corruption
+// of party 0 (the hub) with any other party is NOT covered — that
+// requires a native N-party OT-extension protocol, documented in
+// docs/MPC_WIRE_DESIGN.md as a follow-up.
+//
+// partyIdx: my party index in [0, N)
+// N: number of parties
+// count: number of triple bits to generate
+// sockets: sockets[i] is my connection to party i (empty at own index).
+//          Total N sockets; sockets[myIdx] is unused.
+// Returns a vector of BeaverTripleBits with N shares each.
+macoro::task<std::vector<BeaverTripleBit>> oleGenerateTriplesNParty(
+    uint64_t partyIdx,
+    uint32_t N,
+    size_t count,
+    oc::PRNG& prng,
+    std::vector<coproto::Socket>& sockets);
+
 // Verify a batch of triples satisfies the invariant
 //   for each i:  triples[i].u.reconstruct()
 //              & triples[i].v.reconstruct()

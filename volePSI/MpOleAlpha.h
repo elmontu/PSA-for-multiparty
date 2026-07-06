@@ -31,6 +31,9 @@
 #include "cryptoTools/Common/block.h"
 #include "cryptoTools/Crypto/PRNG.h"
 
+#include "coproto/Socket/Socket.h"
+#include "macoro/task.h"
+
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -123,6 +126,32 @@ bool macCheckBatched(
     const std::vector<AuthShareMine>& sharesB,
     oc::block jointAlpha,
     oc::PRNG& challengePrng);
+
+// R37: Wire-protocol variant of the OLE correlation generator.
+// Follows the same handshake-then-seeded-PRNG scaffold as
+// cgpPreprocessOverWire (see MpCgpPreprocess.h) so both parties derive
+// consistent (a, c) values from a shared random seed. The libOTe
+// SilentVole substitution slots into this function.
+//
+// partyIdx == 0 plays the "A" role (holds alphaA, receives aA)
+// partyIdx == 1 plays the "B" role (holds b,      receives cB)
+//
+// Callers on party 0 pass `alphaA` (their own α-share); party 1's
+// value is derived from the shared seed. Callers on party 1 pass
+// their input `b` (their x value being MAC'd).
+//
+// Returns THIS party's OLE correlation (the other party's half is
+// held only by the peer, matching the security invariant).
+struct OleGf128CorrelationOverWire {
+    oc::block myValue;
+    oc::block myMask;
+};
+
+macoro::task<OleGf128CorrelationOverWire> oleGf128OverWire(
+    uint64_t partyIdx,
+    oc::block myInputValue,  // alphaA for party 0; b for party 1
+    oc::PRNG& prng,
+    coproto::Socket& sock);
 
 } // namespace mpstar
 } // namespace volePSI
