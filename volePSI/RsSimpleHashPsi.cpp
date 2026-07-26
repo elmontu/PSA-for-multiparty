@@ -1,4 +1,4 @@
-#include "RsPsi.h"
+#include "RsSimpleHashPsi.h"
 #include <array>
 #include <future>
 #include "coproto/coproto.h"
@@ -27,7 +27,7 @@ namespace volePSI
         }
     };
 
-    void details::RsPsiBase::init(
+    void details::RsSimpleHashPsiBase::init(
         u64 senderSize,
         u64 recverSize,
         u64 statSecParam,
@@ -60,7 +60,7 @@ namespace volePSI
         };
     }
 
-    task<> RsPsi3rdPSenderB::runSpHshPSI(span<block> inputs, Socket &chl, Socket &ch2)
+    task<> RsSimpleHashPsi3rdPSenderB::runSpHshPSI(span<block> inputs, Socket &chl, Socket &ch2)
     {
 
         auto psiseed = block{};
@@ -80,7 +80,7 @@ namespace volePSI
         setTimePoint("BOB : run-sendHash");
     }
 
-    Proto RsPsi3rdPSenderB::runSpHshPsiOsn(Socket &chl, Socket &ch2, std::vector<block> &sendSet, std::vector<block> &payloadSet)
+    Proto RsSimpleHashPsi3rdPSenderB::runSpHshPsiOsn(Socket &chl, Socket &ch2, std::vector<block> &sendSet, std::vector<block> &payloadSet)
     {
         setTimePoint("BOB : enter protocol");
         setSenderSize(sendSet.size());
@@ -108,7 +108,7 @@ namespace volePSI
         co_await (ch2.recv(myPi_SdrB));
     }
 
-    task<> RsPsi3rdPSenderA::runSpHshPSI(span<block> inputs, Socket &chl, Socket &ch2)
+    task<> RsSimpleHashPsi3rdPSenderA::runSpHshPSI(span<block> inputs, Socket &chl, Socket &ch2)
     {
 
         auto data = std::unique_ptr<block[]>{};
@@ -129,7 +129,7 @@ namespace volePSI
         std::cout << "Alice sends to Bob: " << chl.bytesSent() << " Bytes." << std::endl;
     }
 
-    Proto RsPsi3rdPSenderA::runSpHshPsiOsn(Socket &chl, Socket &ch2, std::vector<block> &recverSet, std::vector<block> &payloadSet)
+    Proto RsSimpleHashPsi3rdPSenderA::runSpHshPsiOsn(Socket &chl, Socket &ch2, std::vector<block> &recverSet, std::vector<block> &payloadSet)
     {
         setTimePoint("ALICE : enter protocol");
         setRecverSize(recverSet.size());
@@ -156,7 +156,7 @@ namespace volePSI
         co_await (ch2.recv(myPi_SdrA));
     }
 
-    task<> RsPsi3rdPReceiver::runSpHshPSI(Socket &chl, Socket &ch2)
+    task<> RsSimpleHashPsi3rdPReceiver::runSpHshPSI(Socket &chl, Socket &ch2)
     {
         auto data = std::unique_ptr<block[]>{};
         auto myHashes = span<block>{};
@@ -208,7 +208,7 @@ namespace volePSI
         setTimePoint("SHS : run-found");
     }
 
-    task<> RsPsi3rdPReceiver::run_OSN_Ssingle(Socket &chl, OSNSender &OsnSender, std::vector<u64> intersection,
+    task<> RsSimpleHashPsi3rdPReceiver::run_OSN_Ssingle(Socket &chl, OSNSender &OsnSender, std::vector<u64> intersection,
                                               size_t size, std::vector<block> &sender_shares)
     {
         std::vector<int> myPi;
@@ -230,7 +230,7 @@ namespace volePSI
         co_await (OsnSender.run_osn(chl, sender_shares));
     }
 
-    Proto RsPsi3rdPReceiver::runSpHshPsiOsn(Socket &chl, Socket &ch2)
+    Proto RsSimpleHashPsi3rdPReceiver::runSpHshPsiOsn(Socket &chl, Socket &ch2)
     {
         std::vector<int> myPiA, myPiB;
         std::vector<block> interPLA, interPLB;

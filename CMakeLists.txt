@@ -24,6 +24,7 @@ option(VOLE_PSI_BUILD_TESTS "Build offline unit tests for MPSA additions" OFF)
 if(VOLE_PSI_BUILD_TESTS)
     add_subdirectory(tests/unit)
     add_subdirectory(tests/benchmarks)
+    add_subdirectory(tests/math_cpp)
 endif()
 
 # setup the install

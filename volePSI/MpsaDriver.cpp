@@ -16,6 +16,7 @@
 #include "MpsaDriver.h"
 
 #include "RsMpsi.h"
+#include "RsMpsiVole.h"
 #include "MpStarChannel.h"
 #include "MpStarSetup.h"
 #include "MpStarCrypto.h"
@@ -25,6 +26,7 @@
 #include "MpTranscript.h"
 #include "MpIdentity.h"
 #include "MpShuffleDriver.h"
+#include "MpsaShuffleIntegrity.h"  // A-sum per-column sum integrity check
 #include "MpCgpShuffle.h"   // for the Row alias used in wide-payload helpers
 #include "fileBased.h"
 
@@ -183,7 +185,8 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
                              uint64_t padCmax, bool pqHybrid,
                              uint64_t minK, double cardEpsilon,
                              const std::string& authDir,
-                             uint32_t payloadW)
+                             uint32_t payloadW, bool integrityCheckOn,
+                             bool useVoleMpsi)
 {
     std::vector<coproto::Socket> senderSocks(N);
     for (uint32_t i = 0; i < N; ++i) {
@@ -266,11 +269,24 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
     }
     LOG << "[SP] set sizes received\n";
 
-    RsMpsi3rdPReceiver mpsi;
-    mpsi.init(perSenderSetSize[0], perSenderSetSize[0], 40, sysRandomSeed(), false, 1);
-    LOG << "[SP] MPSI starting\n";
-    uint64_t C = co_await mpsi.runIntersection(senderSocks, N, perSenderSetSize);
-    LOG << "[SP] MPSI done; C=" << C << "\n";
+    uint64_t C;
+    if (useVoleMpsi) {
+        // Stage B backend: vendored ladnir/volepsi 2PC RsPsi in cascade
+        // (see volePSI/RsMpsiVole.{h,cpp}). Sender 0's raw set leaks to SP
+        // by construction; senders 1..N-1 remain OPRF-protected. Closes C2
+        // (SP dictionary attack) at the cost of that trade.
+        RsMpsiVoleReceiver mpsi;
+        mpsi.init(perSenderSetSize[0], perSenderSetSize[0], 40, sysRandomSeed(), false, 1);
+        LOG << "[SP] MPSI (vole backend) starting\n";
+        C = co_await mpsi.runIntersection(senderSocks, N, perSenderSetSize);
+        LOG << "[SP] MPSI (vole) done; C=" << C << "\n";
+    } else {
+        RsMpsi3rdPReceiver mpsi;
+        mpsi.init(perSenderSetSize[0], perSenderSetSize[0], 40, sysRandomSeed(), false, 1);
+        LOG << "[SP] MPSI (simplehash backend) starting\n";
+        C = co_await mpsi.runIntersection(senderSocks, N, perSenderSetSize);
+        LOG << "[SP] MPSI (simplehash) done; C=" << C << "\n";
+    }
 
     // Threshold-k revelation (T10): abort cleanly if intersection too small
     // for k-anonymity-style compliance. SP MUST commit to k_min before MPSI
@@ -316,6 +332,51 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
     LOG << "[SP] effective row count Ceff=" << Ceff << " (pad from C=" << C << ")\n";
     C = Ceff;
 
+    // A-sum integrity: receive each sender's per-column commitment vector
+    // BEFORE their m_i, so senders are bound to their claimed column sums
+    // before SP sees any masked payload. Wire order matches the sender's
+    // send order (commits, then m_i) -- see runSenderRole.
+    //
+    // Length cap: legitimate commit payload is W*32 bytes plaintext + AEAD
+    // overhead (< 128 bytes). With payloadW capped at 256, that's < 8.2 KB.
+    // Cap at 64 KB to reject DoS attempts (malicious sender sending
+    // UINT64_MAX length prefix would OOM the SP otherwise).
+    constexpr uint64_t kMaxCommitBytes = 64ULL * 1024;
+    std::vector<std::vector<volePSI::mpstar::PedersenCommitment>> senderCommits(N);
+    std::vector<volePSI::mpstar::PedersenCommitment> senderRowCommits(N);
+    if (integrityCheckOn) {
+        for (uint32_t i = 0; i < N; ++i) {
+            uint64_t commitLen = 0;
+            co_await senderSocks[i].recv(commitLen);
+            if (commitLen > kMaxCommitBytes) {
+                throw std::runtime_error(
+                    "MpsaDriver: A-sum commit length from sender "
+                    + std::to_string(i) + " exceeds cap ("
+                    + std::to_string(commitLen) + " > "
+                    + std::to_string(kMaxCommitBytes) + ")");
+            }
+            std::vector<uint8_t> commitCt(commitLen);
+            co_await senderSocks[i].recv(commitCt);
+            auto commitBytes = volePSI::mpstar::aeadDecrypt(commitCt, spKeys[i]);
+            senderCommits[i] = volePSI::mpstar::deserializeCommits(commitBytes, payloadW);
+
+            // A-mset-row commit (32 bytes plaintext + AEAD overhead ~48 bytes).
+            uint64_t rowCommitLen = 0;
+            co_await senderSocks[i].recv(rowCommitLen);
+            if (rowCommitLen > kMaxCommitBytes) {
+                throw std::runtime_error(
+                    "MpsaDriver: A-mset-row commit length from sender "
+                    + std::to_string(i) + " exceeds cap");
+            }
+            std::vector<uint8_t> rowCommitCt(rowCommitLen);
+            co_await senderSocks[i].recv(rowCommitCt);
+            auto rowCommitBytes = volePSI::mpstar::aeadDecrypt(rowCommitCt, spKeys[i]);
+            senderRowCommits[i] = volePSI::mpstar::deserializeRowCommit(rowCommitBytes);
+        }
+        LOG << "[SP] integrity: received W=" << payloadW
+            << " column commits + row commit from each of " << N << " senders\n";
+    }
+
     // Receive AEAD-wrapped masked payloads m_i from each sender. Each m_i
     // arrives as C*W blocks in row-major order (when payloadW > 1) or just
     // C blocks (W=1, legacy). SP flattens to N*W cascade columns of length
@@ -344,6 +405,71 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
         osnSocksA, osnSocksB, revealSock,
         N, C, std::move(initialMasked), spKeys, sessionId);
     LOG << "[SP] runSp done\n";
+
+    // A-sum verify: receive openings and check per-sender per-column integrity
+    // BEFORE writing output. Fail-close on any mismatch; do NOT write the CSV
+    // in that case, and let the caller see the exception.
+    //
+    // Length cap: legitimate opening payload is 2*W*32 bytes plaintext + AEAD
+    // overhead (< 128 bytes). With payloadW capped at 256, that's < 16.3 KB.
+    // Cap at 128 KB to reject DoS attempts.
+    constexpr uint64_t kMaxOpeningBytes = 128ULL * 1024;
+    if (integrityCheckOn) {
+        for (uint32_t i = 0; i < N; ++i) {
+            uint64_t openingLen = 0;
+            co_await senderSocks[i].recv(openingLen);
+            if (openingLen > kMaxOpeningBytes) {
+                throw std::runtime_error(
+                    "MpsaDriver: A-sum opening length from sender "
+                    + std::to_string(i) + " exceeds cap ("
+                    + std::to_string(openingLen) + " > "
+                    + std::to_string(kMaxOpeningBytes) + ")");
+            }
+            std::vector<uint8_t> openingCt(openingLen);
+            co_await senderSocks[i].recv(openingCt);
+            auto openingBytes = volePSI::mpstar::aeadDecrypt(openingCt, spKeys[i]);
+            std::vector<volePSI::mpstar::R255Scalar> claimedSums, openings;
+            volePSI::mpstar::deserializeOpenings(
+                openingBytes, payloadW, claimedSums, openings);
+
+            // Extract sender-i's shuffled columns: shuffled[i*W .. i*W+W-1].
+            std::vector<std::vector<block>> senderCols(payloadW);
+            for (uint32_t w = 0; w < payloadW; ++w) {
+                senderCols[w] = shuffled[i * payloadW + w];
+            }
+            if (!volePSI::mpstar::verifySenderIntegrity(
+                    senderCommits[i], claimedSums, openings, senderCols)) {
+                throw std::runtime_error(
+                    "MpsaDriver: A-sum integrity check FAILED for sender "
+                    + std::to_string(i) + " -- refusing to write output");
+            }
+
+            // A-mset-row: complementary opening + verify. Catches cross-column
+            // tampering that A-sum passes (see MpsaShuffleIntegrity.h).
+            uint64_t rowOpeningLen = 0;
+            co_await senderSocks[i].recv(rowOpeningLen);
+            if (rowOpeningLen > kMaxOpeningBytes) {
+                throw std::runtime_error(
+                    "MpsaDriver: A-mset-row opening length from sender "
+                    + std::to_string(i) + " exceeds cap");
+            }
+            std::vector<uint8_t> rowOpeningCt(rowOpeningLen);
+            co_await senderSocks[i].recv(rowOpeningCt);
+            auto rowOpeningBytes = volePSI::mpstar::aeadDecrypt(rowOpeningCt, spKeys[i]);
+            volePSI::mpstar::R255Scalar rowClaimedSum, rowOpening;
+            volePSI::mpstar::deserializeRowOpening(
+                rowOpeningBytes, rowClaimedSum, rowOpening);
+            if (!volePSI::mpstar::verifySenderRowIntegrity(
+                    senderRowCommits[i], rowClaimedSum, rowOpening, senderCols)) {
+                throw std::runtime_error(
+                    "MpsaDriver: A-mset-row integrity check FAILED for sender "
+                    + std::to_string(i) + " -- refusing to write output "
+                    "(cross-column tampering suspected)");
+            }
+        }
+        LOG << "[SP] integrity: all " << N
+            << " senders passed A-sum + A-mset-row\n";
+    }
 
     // Flush all SP sockets before destruction to keep coproto happy.
     for (auto& sock : osnSocksA) co_await sock.flush();
@@ -379,7 +505,8 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
                                  const std::string& inputPath, const std::string& spHost,
                                  uint64_t padCmax, bool pqHybrid,
                                  const std::string& authDir, bool mpsiSalted,
-                                 uint32_t payloadW)
+                                 uint32_t payloadW, bool integrityCheckOn,
+                                 bool useVoleMpsi)
 {
     LOG << "[S" << selfIdx << "] connecting spSock\n";
     coproto::Socket spSock = senderConnect(spHost, basePort + selfIdx);
@@ -502,11 +629,23 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
     co_await spSock.send(ids.size());
     LOG << "[S" << selfIdx << "] sent set size; running MPSI\n";
 
-    RsMpsi3rdPSender mpsi;
-    mpsi.init(ids.size(), ids.size(), 40, sysRandomSeed(), false, 1);
-    auto bitvec = co_await mpsi.runIntersection(span<block>(ids), spSock, selfIdx, N);
-    uint64_t C = mpsi.getCardinality();
-    LOG << "[S" << selfIdx << "] MPSI done; C=" << C << "\n";
+    std::vector<uint8_t> bitvec;
+    uint64_t C = 0;
+    if (useVoleMpsi) {
+        RsMpsiVoleSender mpsi;
+        mpsi.init(ids.size(), ids.size(), 40, sysRandomSeed(), false, 1);
+        LOG << "[S" << selfIdx << "] MPSI (vole backend) starting\n";
+        bitvec = co_await mpsi.runIntersection(span<block>(ids), spSock, selfIdx, N);
+        C = mpsi.getCardinality();
+        LOG << "[S" << selfIdx << "] MPSI (vole) done; C=" << C << "\n";
+    } else {
+        RsMpsi3rdPSender mpsi;
+        mpsi.init(ids.size(), ids.size(), 40, sysRandomSeed(), false, 1);
+        LOG << "[S" << selfIdx << "] MPSI (simplehash backend) starting\n";
+        bitvec = co_await mpsi.runIntersection(span<block>(ids), spSock, selfIdx, N);
+        C = mpsi.getCardinality();
+        LOG << "[S" << selfIdx << "] MPSI (simplehash) done; C=" << C << "\n";
+    }
 
     // Cardinality-hiding via output padding (Round 17). If -cmax is set
     // and > real C, the sender pads c_i with PRNG-random blocks. After the
@@ -554,6 +693,53 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
 
     // Rest of the protocol uses Ceff instead of C.
     C = Ceff;
+
+    // A-sum shuffle integrity (Stage A): BEFORE handing m_i to SP, commit to
+    // the per-column sum of the plaintext c_i we're about to shuffle. The
+    // commit binds sender-i to a specific sum per column; the opening is
+    // released only after the cascade completes. SP verifies both the commit
+    // and that the shuffled column's sum matches. Catches any drop/substitute/
+    // arithmetic corruption in the cascade. See MpsaShuffleIntegrity.h.
+    // Opt out with -no-integrity-check (matched by the caller flag).
+    volePSI::mpstar::SenderColumnWitness integrityWitness;
+    volePSI::mpstar::SenderRowWitness    rowIntegrityWitness;
+    if (integrityCheckOn) {
+        // View c_i as W parallel columns of length Ceff (same layout the
+        // cascade shuffles: cascade column [i*W+w] carries sender-i's payload
+        // block w across rows).
+        std::vector<std::vector<block>> c_i_columns(payloadW,
+                                                    std::vector<block>(Ceff));
+        for (uint32_t w = 0; w < payloadW; ++w) {
+            for (uint64_t j = 0; j < Ceff; ++j) {
+                c_i_columns[w][j] = c_i[j][w];
+            }
+        }
+        integrityWitness = volePSI::mpstar::makeSenderWitness(c_i_columns);
+        auto commitBytes = volePSI::mpstar::serializeCommits(integrityWitness.commits);
+        auto commitCt    = volePSI::mpstar::aeadEncrypt(commitBytes, spKey);
+        uint64_t commitLen = commitCt.size();
+        co_await spSock.send(commitLen);
+        co_await spSock.send(std::move(commitCt));
+        LOG << "[S" << selfIdx << "] A-sum: sent W=" << payloadW
+            << " column commits (" << commitLen << " bytes AEAD)\n";
+
+        // A-mset-row: complementary row-hash commit that catches cross-column
+        // tampering (A-sum's known gap). c_i is already row-major (Ceff x W),
+        // so pass directly.
+        std::vector<std::vector<block>> c_i_rows;
+        c_i_rows.reserve(Ceff);
+        for (uint64_t j = 0; j < Ceff; ++j) c_i_rows.push_back(c_i[j]);
+        rowIntegrityWitness = volePSI::mpstar::makeSenderRowWitness(c_i_rows);
+        auto rowCommitBytes = volePSI::mpstar::serializeRowCommit(
+            rowIntegrityWitness.commit);
+        auto rowCommitCt    = volePSI::mpstar::aeadEncrypt(rowCommitBytes, spKey);
+        uint64_t rowCommitLen = rowCommitCt.size();
+        co_await spSock.send(rowCommitLen);
+        co_await spSock.send(std::move(rowCommitCt));
+        LOG << "[S" << selfIdx << "] A-mset-row: sent row commit ("
+            << rowCommitLen << " bytes AEAD)\n";
+    }
+
     LOG << "[S" << selfIdx << "] m_i built; AEAD-encrypting (" << (Ceff * payloadW) << " blocks)\n";
     // Flatten C × W into one length-(C·W) buffer (row-major) for AEAD send.
     auto m_i_flat   = flattenRowMajor(m_i, payloadW);
@@ -688,6 +874,32 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
         chan, setup, selfIdx, N, C, std::move(ownMasks),
         osnSocketA, osnSocketB, revealSocket, spKey, sessionId);
 
+    // A-sum reveal: after the cascade completes, ship the per-column openings
+    // to SP so SP can verify (a) the pre-cascade commit binds to this sum, and
+    // (b) the shuffled column's sum matches. Sent under spKey AEAD like m_i.
+    if (integrityCheckOn) {
+        auto openingBytes = volePSI::mpstar::serializeOpenings(
+            integrityWitness.claimedSums, integrityWitness.openings);
+        auto openingCt    = volePSI::mpstar::aeadEncrypt(openingBytes, spKey);
+        uint64_t openingLen = openingCt.size();
+        co_await spSock.send(openingLen);
+        co_await spSock.send(std::move(openingCt));
+        LOG << "[S" << selfIdx << "] A-sum: sent openings (" << openingLen
+            << " bytes AEAD)\n";
+
+        // A-mset-row: complementary opening for the row-hash commit.
+        auto rowOpeningBytes = volePSI::mpstar::serializeRowOpening(
+            rowIntegrityWitness.claimedSum, rowIntegrityWitness.opening);
+        auto rowOpeningCt    = volePSI::mpstar::aeadEncrypt(rowOpeningBytes, spKey);
+        uint64_t rowOpeningLen = rowOpeningCt.size();
+        co_await spSock.send(rowOpeningLen);
+        co_await spSock.send(std::move(rowOpeningCt));
+        LOG << "[S" << selfIdx << "] A-mset-row: sent row opening ("
+            << rowOpeningLen << " bytes AEAD)\n";
+
+        co_await spSock.flush();  // last spSock traffic; flush before destructor
+    }
+
     // coproto requires all sockets to be flushed before destruction or
     // terminate() fires. Flush every socket we held.
     // (spSock was moved into chan; the chan's peer sockets get flushed via
@@ -743,14 +955,28 @@ static void printMpsaUsage(std::ostream& os)
         "                     If set, parties authenticate ephemeral pubkeys\n"
         "                     against pre-distributed long-term identities.\n"
         "                     See docs/AUTHENTICATED_HANDSHAKE_DESIGN.md\n"
-        "    -salt-mpsi       Per-session-salted MPSI hashing (T15)\n"
-        "                     Senders agree on a secret salt via peer mesh; XOR\n"
-        "                     into IDs before MPSI hashing. SP can't dictionary-\n"
-        "                     attack known IDs anymore. See SALTED_MPSI_DESIGN.md\n"
+        "    -no-salt-mpsi    Disable per-session-salted MPSI (T15). DEFAULT IS ON.\n"
+        "                     Without salt, SP picks the MPSI aesKey and can\n"
+        "                     dictionary-attack the AES(aesKey,id) hash lists to\n"
+        "                     recover every sender's raw IDs. Only disable for\n"
+        "                     benchmarks or backwards-compat interop.\n"
+        "                     See SALTED_MPSI_DESIGN.md\n"
         "    -pw <W>    Payload width in 16-byte blocks per row (default 1).\n"
         "               CSV must then have 1+W columns: col0=ID, cols1..W=payload.\n"
         "               Cascade carries N*W single-block columns; output CSV has\n"
         "               N*W comma-separated hex blocks per intersection row.\n"
+        "    -mpsi-backend <name>   MPSI primitive: 'simplehash' (default) or 'vole'.\n"
+        "                     'vole' uses vendored ladnir/volepsi 2PC VOLE-PSI in a\n"
+        "                     cascade. Closes SP dictionary-attack (C2) via real OPRF\n"
+        "                     for senders 1..N-1; note that sender 0's raw set is\n"
+        "                     revealed to SP in the cascade (design trade-off).\n"
+        "                     See docs/FIX_STAGE_B_MPSI_VOLE.md.\n"
+        "    -no-integrity-check  Disable A-sum per-column shuffle integrity. DEFAULT IS ON.\n"
+        "                     With A-sum, each sender commits to Σ hash(payload)\n"
+        "                     per column BEFORE the cascade; SP verifies the\n"
+        "                     shuffled column sums match at reveal, catching\n"
+        "                     drop/substitute/arithmetic corruption. Only disable\n"
+        "                     for benchmarks. Semi-honest security is unaffected.\n"
         "\n"
         "Helper modes:\n"
         "    -auth-genkey -auth-dir <dir> -auth-id <name> [-auth-sk <skfile>]\n"
@@ -800,7 +1026,30 @@ void doFileMpsa(CLP& cmd)
     uint64_t minK = cmd.getOr<uint64_t>("mink", 0);          // threshold-k reveal (T10)
     double cardEpsilon = cmd.getOr<double>("dp", 0.0);       // DP cardinality release (T8)
     std::string authDir = cmd.getOr<std::string>("auth-dir", "");  // T14 long-term identity dir
-    bool mpsiSalted = cmd.isSet("salt-mpsi");                       // T15 per-session salted MPSI
+    // T15 per-session salted MPSI: DEFAULT-ON. The unsalted path lets the SP
+    // dictionary-attack MPSI hashes (SP picks aesKey and receives raw
+    // AES(aesKey,id) lists; see RsMpsi.cpp). Salt XORs a sender-agreed
+    // secret into each id before hashing, blocking the attack. Opt out with
+    // -no-salt-mpsi only for benchmarks or protocol interop with an older
+    // peer; production runs must not disable this.
+    bool mpsiSalted = !cmd.isSet("no-salt-mpsi");
+    // Stage A per-column shuffle-integrity check (default on). See
+    // MpsaShuffleIntegrity.h + docs/FIX_A_SUM_INTEGRITY.md for the protocol.
+    bool integrityCheckOn = !cmd.isSet("no-integrity-check");
+    // Stage B: MPSI backend selection. Default is the legacy simple-hash
+    // backend (semi-honest + T15 salt); "-mpsi-backend vole" switches to the
+    // vendored ladnir/volepsi 2PC VOLE-PSI cascade (real OPRF, closes C2
+    // dictionary attack for senders 1..N-1; sender 0's raw set leaks to SP
+    // by construction of the cascade). See docs/FIX_STAGE_B_MPSI_VOLE.md.
+    std::string mpsiBackend = cmd.getOr<std::string>("mpsi-backend",
+                                                     std::string("simplehash"));
+    bool useVoleMpsi = (mpsiBackend == "vole");
+    if (mpsiBackend != "simplehash" && mpsiBackend != "vole") {
+        printMpsaUsage(std::cerr);
+        throw std::runtime_error(
+            "MpsaDriver: -mpsi-backend must be 'simplehash' (default) or 'vole'; got '"
+            + mpsiBackend + "'");
+    }
     uint32_t payloadW = cmd.getOr<uint32_t>("pw", 1);               // payload width (16B blocks per row)
     if (payloadW < 1 || payloadW > 256) {
         printMpsaUsage(std::cerr);
@@ -823,7 +1072,8 @@ void doFileMpsa(CLP& cmd)
     if (role == 0) {
         std::string out = cmd.getOr<std::string>("out", "out_cleartext.csv");
         macoro::sync_wait(runSpRole(N, basePort, out, padCmax, pqHybrid, minK,
-                                    cardEpsilon, authDir, payloadW));
+                                    cardEpsilon, authDir, payloadW, integrityCheckOn,
+                                    useVoleMpsi));
     } else if (role == 1) {
         uint32_t idx = cmd.getOr<uint32_t>("i", 0);
         std::string in = cmd.getOr<std::string>("in", "");
@@ -832,7 +1082,8 @@ void doFileMpsa(CLP& cmd)
             throw std::runtime_error("MpsaDriver: sender requires -in <csv> and -i in [0, N)");
         }
         macoro::sync_wait(runSenderRole(N, idx, basePort, in, spHost, padCmax,
-                                        pqHybrid, authDir, mpsiSalted, payloadW));
+                                        pqHybrid, authDir, mpsiSalted, payloadW,
+                                        integrityCheckOn, useVoleMpsi));
     } else {
         printMpsaUsage(std::cerr);
         throw std::runtime_error("MpsaDriver: invalid -r role (use 0 for SP, 1 for sender)");

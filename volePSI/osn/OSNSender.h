@@ -41,17 +41,23 @@ public:
 	OSNSender(size_t size = 0, int ot_type = 0);
 	void init(size_t size, int ot_type = 0, const std::string &osn_cache = "", const std::vector<uint64_t> intersection = {});
 	void init_wj(size_t size, int ot_type, const std::string &osn_cache, std::map<int, int> &i2locptr);
-	// Same as init_wj but seeds the Fisher-Yates PRNG explicitly. Required
-	// for any multi-round shuffle protocol that needs different
-	// permutations across rounds (init_wj uses a hardcoded seed, so all
-	// invocations at the same size produce the same dest). Caller must
-	// agree on the seed with the OSNReceiver counterpart out of band.
+	// Same as init_wj but the caller supplies the Fisher-Yates PRNG seed
+	// explicitly. init_wj now seeds from sysRandomSeed() so its permutation
+	// is fresh per call but non-reproducible; use this entry point when
+	// the caller needs a SPECIFIC (usually secret) permutation controlled
+	// by its own local RNG -- e.g. MpShuffleDriver's per-round holder.
+	// The seed must NOT be shared with the counterpart.
 	void init_wj_seeded(size_t size, int ot_type, const std::string &osn_cache,
 	                    std::map<int, int> &i2locptr, oc::block seed);
 	std::vector<int> getmyPi(const std::map<int, int> &i2loc, const std::vector<u64> &intersection);
 	std::vector<int> getPi() { return mPi; }
 	void setPi(std::vector<int> myPi) { mPi = myPi; }
 	task<> run_osn(Socket &chl, std::vector<oc::block> &input_vec);
+    // Apply THIS sender's routing (as fixed by the preceding init_wj_seeded /
+    // init_wj call) to a plaintext block vector, in the same direction that
+    // run_osn permutes the receiver's input. Lets the permutation holder
+    // permute its own share locally, so the counterpart never needs the seed.
+    void permuteBlocks(std::vector<oc::block> &v);
 	void setTimer(oc::Timer &timer);
 	oc::Timer &getTimer() { return *timer; };
 };

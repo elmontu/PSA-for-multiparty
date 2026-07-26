@@ -1,6 +1,6 @@
 #include "fileBased.h"
 #include "cryptoTools/Crypto/RandomOracle.h"
-#include "RsPsi.h"
+#include "RsSimpleHashPsi.h"
 
 #include "coproto/Socket/AsioSocket.h"
 
@@ -390,7 +390,7 @@ namespace volePSI
                           << " ms,\nstart to run secure inner join... " << std::flush;
             if (r == Role::Sender)
             {
-                RsPsi3rdPSenderB sender;
+                RsSimpleHashPsi3rdPSenderB sender;
                 std::vector<block> sendSet_sharesB;
                 std::vector<block> recvSet_sharesB;
                 std::vector<block> interShareB2SHS;
@@ -435,7 +435,7 @@ namespace volePSI
             }
             else if (r == Role::Receiver)
             {
-                RsPsi3rdPSenderA recver;
+                RsSimpleHashPsi3rdPSenderA recver;
                 std::vector<block> sendSet_sharesA;
                 std::vector<block> recvSet_sharesA;
                 std::vector<block> interShareA2SHS;
@@ -482,7 +482,7 @@ namespace volePSI
             }
             else
             {
-                RsPsi3rdPReceiver server;
+                RsSimpleHashPsi3rdPReceiver server;
 
                 std::vector<block> mSenderA_shares;
                 std::vector<block> mSenderB_shares;

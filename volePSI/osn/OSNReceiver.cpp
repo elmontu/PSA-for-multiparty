@@ -17,9 +17,11 @@ using namespace oc;
 
 task<> OSNReceiver::rand_ot_send(std::vector<std::array<osuCrypto::block, 2>> &sendMsg, Socket &chl)
 {
-	// std::cout << "\n OT sender!! \n";
-
-	auto prng1 = osuCrypto::PRNG(_mm_set_epi32(4253233465, 334565, 0, 235));
+	// C4 fix (R37): PRNG seed is fresh randomness per call. The previous
+	// hardcoded _mm_set_epi32(...) constant made base-OT messages predictable,
+	// leaking OT choice bits (= Benes switches = the shuffle permutation) to
+	// any observer with source access.
+	auto prng1 = osuCrypto::PRNG(oc::sysRandomSeed());
 	auto baseRecv = std::vector<osuCrypto::block>{};
 	auto baseChoice = osuCrypto::BitVector{};
 	auto baseOTs = osuCrypto::DefaultBaseOT();
@@ -45,7 +47,8 @@ std::unique_ptr<osuCrypto::SilentOtExtSender> OSNReceiver::getSilentOtExtSender(
 
 task<> OSNReceiver::silent_ot_send(std::vector<std::array<osuCrypto::block, 2>> &sendMsg, Socket &chl)
 {
-	auto prng1 = osuCrypto::PRNG(_mm_set_epi32(4253233465, 334565, 0, 235));
+	// C4 fix: fresh per-call PRNG seed. See rand_ot_send for rationale.
+	auto prng1 = osuCrypto::PRNG(oc::sysRandomSeed());
 	auto numOTs = 0;
 	co_await getSilentOtExtSender(numOTs)->silentSend(sendMsg, prng1, chl);
 }
@@ -56,7 +59,12 @@ task<> OSNReceiver::gen_benes_client_osn(int values, Socket &chl, std::vector<st
 	int N = 0, levels = 0, switches = 0;
 	auto temp = block{};
 	auto masks = std::vector<block>{};
-	auto prng = osuCrypto::PRNG(_mm_set_epi32(4253233465, 334565, 0, 235));
+	// C4 fix: the OSN INPUT MASKS below (`masks[j] = prng.get<block>()`)
+	// are what the receiver XORs into its input before the wire send. With
+	// the old constant seed, the whole `masks[]` array was reproducible from
+	// source alone -- any counterpart could recover the plaintext OSN input
+	// from `benes_input = masks XOR input` on the wire. Now truly random.
+	auto prng = osuCrypto::PRNG(oc::sysRandomSeed());
 	auto tmp_messages = std::vector<std::array<osuCrypto::block, 2>>{};
 	auto ot_messages = std::vector<std::array<std::array<osuCrypto::block, 2>, 2>>{};
 	auto bit_correction = osuCrypto::BitVector{};

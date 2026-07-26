@@ -19,7 +19,7 @@ namespace volePSI
 {
     namespace details
     {
-        struct RsPsiBase
+        struct RsSimpleHashPsiBase
         {
             u64 mSenderSize = 0;
             u64 mRecverSize = 0;
@@ -41,7 +41,7 @@ namespace volePSI
     }
 
     // TKL added
-    class RsPsi3rdPSenderA : public details::RsPsiBase, public oc::TimerAdapter
+    class RsSimpleHashPsi3rdPSenderA : public details::RsSimpleHashPsiBase, public oc::TimerAdapter
     {
         OSNReceiver mOsnRecv;
         std::vector<block> mReceiver_shares;
@@ -69,7 +69,7 @@ namespace volePSI
         std::vector<int> getmyPi() { return myPi_SdrA; }
     };
 
-    class RsPsi3rdPSenderB : public details::RsPsiBase, public oc::TimerAdapter
+    class RsSimpleHashPsi3rdPSenderB : public details::RsSimpleHashPsiBase, public oc::TimerAdapter
     {
         OSNReceiver mOsnRecv;
         std::vector<block> mReceiver_shares;
@@ -90,7 +90,7 @@ namespace volePSI
         std::vector<int> getmyPi() { return myPi_SdrB; }
     };
 
-    class RsPsi3rdPReceiver : public details::RsPsiBase, public oc::TimerAdapter
+    class RsSimpleHashPsi3rdPReceiver : public details::RsSimpleHashPsiBase, public oc::TimerAdapter
     {
         OSNSender mOsnSenderA;
         OSNSender mOsnSenderB;

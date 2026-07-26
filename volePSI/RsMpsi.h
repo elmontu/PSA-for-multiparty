@@ -1,6 +1,6 @@
 #pragma once
 
-#include "RsPsi.h"
+#include "RsSimpleHashPsi.h"
 #include "coproto/coproto.h"
 #include "cryptoTools/Common/Defines.h"
 #include "cryptoTools/Crypto/AES.h"
@@ -8,7 +8,7 @@
 
 namespace volePSI {
 
-class RsMpsi3rdPSender : public details::RsPsiBase, public oc::TimerAdapter {
+class RsMpsi3rdPSender : public details::RsSimpleHashPsiBase, public oc::TimerAdapter {
 public:
     oc::AES mAEShash;
 
@@ -32,7 +32,7 @@ private:
     size_t mCardinality = 0;
 };
 
-class RsMpsi3rdPReceiver : public details::RsPsiBase, public oc::TimerAdapter {
+class RsMpsi3rdPReceiver : public details::RsSimpleHashPsiBase, public oc::TimerAdapter {
 public:
     // SP role: pick AES key, broadcast, receive N hashed sets, compute
     // count-N intersection, send per-sender bitvectors back. Returns cardinality.

@@ -41,12 +41,28 @@ jobs:
       - name: Run offline unit tests
         run: |
           # tests are opt-in via -DVOLE_PSI_BUILD_TESTS=ON; the exact output
-          # path follows the preset's build dir.
-          for t in out/build/linux/tests/unit/test_mpstar_crypto \
-                   out/build/linux/tests/unit/test_kdf; do
+          # path follows the preset's build dir. Run the WHOLE unit-test suite,
+          # not just two binaries — a test that stops being built or starts
+          # failing should turn CI red. Exit code 77 == "skipped" (e.g. tests
+          # that need an in-process socket API not wired in this environment).
+          fail=0
+          shopt -s nullglob
+          for t in out/build/linux/tests/unit/test_*; do
+              [ -x "$t" ] || continue
               echo "=== running $t ==="
-              "$t"
+              if "$t"; then
+                  :
+              else
+                  rc=$?
+                  if [ "$rc" -eq 77 ]; then
+                      echo "--- SKIPPED (exit 77): $t"
+                  else
+                      echo "!!! FAILED (exit $rc): $t"
+                      fail=1
+                  fi
+              fi
           done
+          exit $fail
 
       - name: Print disk usage (debug)
         if: always()

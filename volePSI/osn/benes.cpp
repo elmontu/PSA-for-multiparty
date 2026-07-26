@@ -322,6 +322,107 @@ void Benes::gen_benes_eval(int n, int lvl_p, int perm_idx, vector<uint64_t> &src
 	}
 }
 
+// Plaintext block-valued Benes evaluation. Applies the SAME permutation that
+// gen_benes_masked_evaluate applies (identical `switched` settings and routing),
+// but with no OT masks — a party that already holds a value in the clear can use
+// this to permute it by its own routing. Used by MpShuffleDriver so the round's
+// permutation holder can apply its private permutation to its own share locally,
+// instead of forcing the counterpart to know the routing seed.
+void Benes::gen_benes_eval(int n, int lvl_p, int perm_idx, vector<oc::block> &src)
+{
+    int levels, i, j, x, s;
+    vector<oc::block> bottom1;
+    vector<oc::block> top1;
+    int values = src.size();
+    oc::block temp;
+
+    if (values == 2)
+    {
+        if (n == 1)
+        {
+            if (switched[lvl_p][perm_idx] == 1)
+            {
+                temp = src[0];
+                src[0] = src[1];
+                src[1] = temp;
+            }
+        }
+        else if (switched[lvl_p + 1][perm_idx] == 1)
+        {
+            temp = src[0];
+            src[0] = src[1];
+            src[1] = temp;
+        }
+        return;
+    }
+
+    if (values == 3)
+    {
+        if (switched[lvl_p][perm_idx] == 1)
+        {
+            temp = src[0];
+            src[0] = src[1];
+            src[1] = temp;
+        }
+        if (switched[lvl_p + 1][perm_idx] == 1)
+        {
+            temp = src[1];
+            src[1] = src[2];
+            src[2] = temp;
+        }
+        if (switched[lvl_p + 2][perm_idx] == 1)
+        {
+            temp = src[0];
+            src[0] = src[1];
+            src[1] = temp;
+        }
+        return;
+    }
+
+    levels = 2 * n - 1;
+
+    for (i = 0; i < values - 1; i += 2)
+    {
+        s = switched[lvl_p][perm_idx + i / 2];
+        for (j = 0; j < 2; ++j)
+        {
+            x = shuffle((i | j) ^ s, n);
+            if (x < values / 2)
+                bottom1.push_back(src[i | j]);
+            else
+                top1.push_back(src[i | j]);
+        }
+    }
+    if (values % 2 == 1)
+    {
+        top1.push_back(src[values - 1]);
+    }
+
+    gen_benes_eval(n - 1, lvl_p + 1, perm_idx, bottom1);
+    gen_benes_eval(n - 1, lvl_p + 1, perm_idx + values / 4, top1);
+
+    for (i = 0; i < values - 1; i += 2)
+    {
+        s = switched[lvl_p + levels - 1][perm_idx + i / 2];
+        for (j = 0; j < 2; ++j)
+        {
+            x = shuffle((i | j) ^ s, n);
+            if (x < values / 2)
+                src[i | j] = bottom1[x];
+            else
+            {
+                src[i | j] = top1[i / 2];
+            }
+        }
+    }
+
+    int idx = int(ceil(values * 0.5));
+    if (values % 2 == 1)
+    {
+        src[values - 1] = top1[idx - 1];
+    }
+}
+
 void Benes::gen_benes_masked_evaluate(int n, int lvl_p, int perm_idx, vector<oc::block> &src,
 									  vector<vector<array<osuCrypto::block, 2>>> &ot_output)
 {

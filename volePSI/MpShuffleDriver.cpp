@@ -24,21 +24,28 @@
 //   Invariant: M_k[c] XOR R_k[c] = composed-shuffle-so-far applied to c_c.
 //
 //   Round k (driver = sender k):
-//     1) Both ends derive seed_k from sender↔SP session key + sessionId
-//        + "shuffle_round_<k>".
-//     2) For each column c in 0..N-1:
-//        OSN call A (M-side):  SP=receiver provides M_k[c], sender k=sender.
-//            → SP holds m_sender_share_c,  sender k holds m_receiver_share_c
-//            (XOR = M_k[c] permuted by dest_k).
-//        OSN call B (R-side):  sender k=receiver provides R_k[c], SP=sender.
-//            → sender k holds r_sender_share_c,  SP holds r_receiver_share_c
-//            (XOR = R_k[c] permuted by dest_k).
-//        Both calls reuse the SAME init_wj_seeded(C, ..., seed_k) so they
-//        bake the same Benes routing dest_k.
+//     1) Sender k picks a FRESH RANDOM routing seed locally (never shared
+//        with the SP). This is the fix for the R37/A1 finding: previously
+//        the seed was deriveRoundSeed(spKey_k, sessionId, k), which the SP
+//        can recompute for every k (it holds every spKey_k), letting it
+//        reconstruct the whole composed permutation and de-shuffle the
+//        output. With a sender-private seed the SP never learns dest_k.
+//     2) For each column c:
+//        OSN call (M-side):  SP=receiver provides M_k[c], sender k=OSN sender
+//            (holds routing dest_k from the private seed).
+//            → SP holds m_sender_share_c, sender k holds m_receiver_share_c,
+//              with m_sender_share_c XOR m_receiver_share_c = dest_k(M_k[c]).
+//        Sender k permutes its OWN R_k[c] locally by the same dest_k via
+//        OSNSender::permuteBlocks (no OSN, no seed disclosure).
 //     3) New state:
-//        M_{k+1}[c] (SP)         = m_sender_share_c   XOR r_receiver_share_c
-//        R_{k+1}[c] (sender k)   = m_receiver_share_c XOR r_sender_share_c
-//        ⇒ M_{k+1}[c] XOR R_{k+1}[c] = dest_k applied to (M_k[c] XOR R_k[c]).
+//        M_{k+1}[c] (SP)       = m_sender_share_c
+//        R_{k+1}[c] (sender k) = m_receiver_share_c XOR dest_k(R_k[c])
+//        ⇒ M_{k+1}[c] XOR R_{k+1}[c]
+//            = m_sender_share_c XOR m_receiver_share_c XOR dest_k(R_k[c])
+//            = dest_k(M_k[c]) XOR dest_k(R_k[c])
+//            = dest_k applied to (M_k[c] XOR R_k[c]).
+//        The second OSN call (R-side), which forced the SP to hold dest_k,
+//        is eliminated — sender k applies dest_k to its own plaintext share.
 //     4) Sender k AEAD-handoffs R_{k+1} (all N columns) to sender k+1 via
 //        peer-mesh chan.sendTo(k+1, ...).
 //
@@ -50,17 +57,6 @@ namespace volePSI {
 namespace {
 
 constexpr size_t kBlockSize = sizeof(oc::block);
-
-oc::block deriveRoundSeed(const std::array<uint8_t, 32>& spKey,
-                          const std::array<uint8_t, 32>& sessionId,
-                          uint32_t roundIdx)
-{
-    std::string purpose = "shuffle_round_" + std::to_string(roundIdx);
-    auto k = volePSI::mpstar::deriveSessionKey(spKey, sessionId, purpose);
-    oc::block out;
-    std::memcpy(&out, k.data(), kBlockSize);
-    return out;
-}
 
 // Serialize N parallel block vectors into one byte buffer:
 // [column 0 blocks][column 1 blocks]...[column N-1 blocks].
@@ -160,34 +156,41 @@ macoro::task<std::vector<std::vector<oc::block>>> MpShuffleDriver::runSender(
     auto R = std::move(ownMasks);  // colCount columns
     const size_t c_size = static_cast<size_t>(C);
 
+    // A1 fix: the R-side OSN call (which used osnSocketB) is gone — sender k
+    // permutes its own R share locally. The socket param is retained so the
+    // caller's topology setup is unchanged; it simply carries no traffic now.
+    (void)osnSocketB;
+
     for (uint32_t k = 0; k < senderCount - 1; ++k) {
         if (k == selfIdx) {
-            oc::block seed = deriveRoundSeed(spKey, sessionId, k);
+            // A1 fix: fresh per-round routing seed generated locally and NEVER
+            // sent to the SP, so the SP cannot reconstruct dest_k. (Previously
+            // seed = deriveRoundSeed(spKey, sessionId, k), recomputable by the
+            // SP from spKey.)
+            oc::block seed;
+            randombytes_buf(&seed, sizeof(seed));
 
             std::vector<std::vector<oc::block>> R_next(colCount);
 
             for (uint32_t col = 0; col < colCount; ++col) {
-                // ---- OSN call A: I'm the OSN SENDER ----
+                // ---- Single OSN call: I'm the OSN SENDER (routing holder) ----
                 OSNSender osnSA;
                 std::map<int, int> i2locA;
                 osnSA.init_wj_seeded(c_size, 1, "", i2locA, seed);
                 std::vector<oc::block> m_receiver_share;
                 co_await osnSA.run_osn(osnSocketA, m_receiver_share);
                 if (m_receiver_share.size() != c_size)
-                    throw std::runtime_error("MpShuffleDriver: OSN-A returned wrong size");
+                    throw std::runtime_error("MpShuffleDriver: OSN returned wrong size");
 
-                // ---- OSN call B: I'm the OSN RECEIVER providing R[col] ----
-                OSNReceiver osnRB;
-                osnRB.init(c_size, 1);
-                std::vector<oc::block> r_sender_share;
-                co_await osnRB.run_osn(oc::span<oc::block>(R[col].data(), R[col].size()),
-                                       osnSocketB, r_sender_share);
-                if (r_sender_share.size() != c_size)
-                    throw std::runtime_error("MpShuffleDriver: OSN-B returned wrong size");
+                // Permute my own R[col] by the SAME dest_k, locally. This
+                // replaces the former OSN call B, whose R-side required the SP
+                // to hold dest_k and was the source of the permutation leak.
+                std::vector<oc::block> permR = R[col];
+                osnSA.permuteBlocks(permR);
 
                 std::vector<oc::block> R_next_col(c_size);
                 for (size_t j = 0; j < c_size; ++j)
-                    R_next_col[j] = m_receiver_share[j] ^ r_sender_share[j];
+                    R_next_col[j] = m_receiver_share[j] ^ permR[j];
                 R_next[col] = std::move(R_next_col);
             }
 
@@ -245,34 +248,28 @@ macoro::task<std::vector<std::vector<oc::block>>> MpShuffleDriver::runSp(
     auto M = std::move(initialMasked);
     const size_t c_size = static_cast<size_t>(C);
 
-    for (uint32_t k = 0; k < senderCount - 1u; ++k) {
-        oc::block seed = deriveRoundSeed(spKeys[k], sessionId, k);
+    // A1 fix: the SP no longer derives any routing seed and no longer acts as
+    // an OSN SENDER (the former call B). It is only ever the OSN RECEIVER, so
+    // it never holds dest_k and cannot reconstruct the cascade permutation.
+    (void)sessionId;
+    (void)osnSocksB;
 
+    for (uint32_t k = 0; k < senderCount - 1u; ++k) {
         std::vector<std::vector<oc::block>> M_next(colCount);
 
         for (uint32_t col = 0; col < colCount; ++col) {
-            // ---- OSN call A: I'm the OSN RECEIVER providing M[col] ----
+            // ---- Single OSN call: I'm the OSN RECEIVER providing M[col] ----
             OSNReceiver osnRA;
             osnRA.init(c_size, 1);
             std::vector<oc::block> m_sender_share;
             co_await osnRA.run_osn(oc::span<oc::block>(M[col].data(), M[col].size()),
                                    osnSocksA[k], m_sender_share);
             if (m_sender_share.size() != c_size)
-                throw std::runtime_error("MpShuffleDriver: OSN-A returned wrong size");
+                throw std::runtime_error("MpShuffleDriver: OSN returned wrong size");
 
-            // ---- OSN call B: I'm the OSN SENDER ----
-            OSNSender osnSB;
-            std::map<int, int> i2locB;
-            osnSB.init_wj_seeded(c_size, 1, "", i2locB, seed);
-            std::vector<oc::block> r_receiver_share;
-            co_await osnSB.run_osn(osnSocksB[k], r_receiver_share);
-            if (r_receiver_share.size() != c_size)
-                throw std::runtime_error("MpShuffleDriver: OSN-B returned wrong size");
-
-            std::vector<oc::block> M_next_col(c_size);
-            for (size_t j = 0; j < c_size; ++j)
-                M_next_col[j] = m_sender_share[j] ^ r_receiver_share[j];
-            M_next[col] = std::move(M_next_col);
+            // New M share is simply the OSN receiver output. The matching
+            // dest_k(R_k[col]) term is folded into R_{k+1} by sender k locally.
+            M_next[col] = std::move(m_sender_share);
         }
         M = std::move(M_next);
     }
