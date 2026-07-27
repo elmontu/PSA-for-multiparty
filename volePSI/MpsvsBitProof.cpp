@@ -114,22 +114,5 @@ bool verifyBit(const BitProof& pi, const PedersenCommitment& C) {
     return true;
 }
 
-BitProof forgeNonBoolean(int /*fake_bit*/, const R255Scalar& /*r*/,
-                          const PedersenCommitment& /*C*/) {
-    // DEPRECATED: this helper is now unreachable by construction because
-    // `commitBit` refuses to build a non-boolean commitment (see the
-    // std::invalid_argument in commitBit). Prior audit flagged this
-    // function as misleading — a Chaum-Pedersen OR proof CAN produce a
-    // valid-looking artifact when the underlying commitment happens to
-    // decompose as g^0·h^r (i.e. the "attack proof" verified for the
-    // wrong reason). We keep the symbol only so callers that linked
-    // against it fail loudly at runtime rather than silently getting
-    // wrong behaviour. Any legitimate soundness testing should invoke
-    // commitBit(non-bit, r) and observe the throw.
-    throw std::runtime_error(
-        "forgeNonBoolean: deprecated — commitBit now rejects non-boolean b "
-        "at construction. Test soundness by asserting commitBit(2, r) throws.");
-}
-
 } // namespace mpsvs
 } // namespace volePSI

@@ -1,4 +1,25 @@
-# Shuffle NIZK — design, prototype, and gap to full Bayer-Groth (R27)
+# Shuffle NIZK — design and current status (R27b → sound-with-reveal)
+
+> **Status update (post-MPSVS Rev 7 audit cycle):** the R27b residual
+> soundness gap described below has been **closed** in
+> `MpShuffleNizkBg.{h,cpp}` by having the verifier independently
+> recompute both polynomial products from prover-revealed messages
+> after binding-check each opening (`pedersenCommit(m_i, r_i) == c_i`).
+> The construction is now unconditionally sound (Schwartz-Zippel over
+> ~2^252-element field) but no longer zero-knowledge over the messages
+> — an acceptable trade for MPSVS Phase 4 where bin contents are
+> public post-alignment. Full hiding still requires the recursive
+> Bayer-Groth §5 partial-product argument (out of scope for this
+> release). See the `MpShuffleNizkBg.h` header comment and the
+> `test_shuffle_nizk_bg` binary (test `bg_sum_preserving_swap_now_caught`)
+> for the closed-gap regression test.
+>
+> The historical R27 design + gap analysis below is preserved for
+> context.
+
+---
+
+# Historical: Shuffle NIZK — design, prototype, and gap to full Bayer-Groth (R27)
 
 ## Goal
 

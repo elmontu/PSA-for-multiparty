@@ -60,10 +60,5 @@ BitProof proveBit(int bit, const R255Scalar& r, const PedersenCommitment& C);
 // Returns TRUE iff C opens to bit ∈ {0, 1}.
 bool verifyBit(const BitProof& proof, const PedersenCommitment& C);
 
-// Test-only: attempt to construct a "proof" for a non-boolean value.
-// The result WILL NOT verify (that's the point — this catches malicious).
-BitProof forgeNonBoolean(int fake_bit, const R255Scalar& r,
-                          const PedersenCommitment& C);
-
 } // namespace mpsvs
 } // namespace volePSI

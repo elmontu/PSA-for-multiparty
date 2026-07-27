@@ -166,36 +166,6 @@ macoro::task<std::vector<BeaverTripleBit>> oleGenerateTriplesNParty(
         "oleGenerateTriplesNParty: N > 2 not supported — MPSVS Rev 7 fixes "
         "the compute topology at N=2 (S1, S2). A native N-party OLE requires "
         "a different silent-OT extension and is out of scope for this build.");
-#if 0   // Retained for future N-native OLE work — DO NOT enable.
-    std::vector<BeaverTripleBit> combined(count);
-    for (size_t i = 0; i < count; ++i) {
-        combined[i].u = SharedBit(N);
-        combined[i].v = SharedBit(N);
-        combined[i].w = SharedBit(N);
-    }
-
-    if (partyIdx == 0) {
-        // Hub: OLE with each other party. Each pair contributes a share
-        // that we XOR into our slot.
-        for (uint32_t k = 1; k < N; ++k) {
-            auto pair = co_await oleGenerateTriples(0, count, prng, sockets[k]);
-            for (size_t i = 0; i < count; ++i) {
-                combined[i].u.shares[0] ^= pair[i].u.shares[0];
-                combined[i].v.shares[0] ^= pair[i].v.shares[0];
-                combined[i].w.shares[0] ^= pair[i].w.shares[0];
-            }
-        }
-    } else {
-        // Non-hub: single OLE with hub. Store peer share in our slot.
-        auto pair = co_await oleGenerateTriples(1, count, prng, sockets[0]);
-        for (size_t i = 0; i < count; ++i) {
-            combined[i].u.shares[partyIdx] = pair[i].u.shares[1];
-            combined[i].v.shares[partyIdx] = pair[i].v.shares[1];
-            combined[i].w.shares[partyIdx] = pair[i].w.shares[1];
-        }
-    }
-    co_return combined;
-#endif   // Retained N>2 scaffold above under #if 0 — DO NOT enable.
 }
 
 bool verifyBeaverTripleBatch(const std::vector<BeaverTripleBit>& triples)

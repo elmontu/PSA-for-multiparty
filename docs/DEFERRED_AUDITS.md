@@ -1,5 +1,11 @@
 # Deferred audit findings
 
+> **Status update (MPSVS Rev 7 push, 2026-07-27):** items below labelled
+> **[CLOSED]** in the "MPSVS Rev 7 cleanup" section at the end of this
+> document have been addressed. The original R25–R37 backlog below
+> remains as historical record; entries superseded by the Rev 7 work
+> are cross-linked to their fix.
+
 These came out of code review during the initial build but were not
 addressed before commit, either because the fix is non-trivial or because
 the prototype works without it under the documented semi-honest threat
@@ -248,3 +254,87 @@ Successful first end-to-end build on Ubuntu 24.04, libsodium 1.0.18 (system) + a
 - `test_kdf`: 6/6 PASS
 - `test_osn_semantics`: FAIL — surfaced the CRITICAL OSN-pi finding documented above. This is the test working as designed.
 - `frontend -mpsa -h`: prints clean usage; CLI parses correctly.
+
+## MPSVS Rev 7 cleanup (2026-07-27)
+
+The following prior findings were addressed as part of the MPSVS Rev 7
+malicious-secure primitives + production-hardening cycle. See commit
+`bde2377` on `main` and the README §"MPSVS Π_SECTORVULN Rev 7" section
+for details.
+
+### [CLOSED] Shuffle NIZK — R27b soundness gap
+- **Before:** `MpShuffleNizkBg::shuffleVerifyBg` compared prover-supplied
+  `productOrig == productShuf` without recomputing them from
+  commitments; a sum-preserving multiset swap passed verification.
+- **After:** verifier now checks each opening
+  `pedersenCommit(m_i, r_i) == c_i` for both sides, then independently
+  recomputes both products under Fiat-Shamir challenges. Regression
+  test `test_shuffle_nizk_bg::bg_sum_preserving_swap_now_caught`.
+
+### [CLOSED] SPDZ α — plaintext-α single-verifier model
+- **Before:** all SPDZ MAC ops took `uint64_t alpha` as plaintext,
+  meaning any party executing the MAC check knew α — not standard SPDZ
+  malicious model.
+- **After:** parallel API surface with shared-α (DPSZ 2012 §3.3):
+  `openWithMacCheckShared`, `authSecureMultiplyShared`,
+  `sacrificeCheckTripleShared`, `verifyReciprocalAuthShared`,
+  `batchOpenWithMacCheckShared`. α never reconstructed. Two-phase
+  commit/reveal with post-commit-tamper regression test.
+
+### [CLOSED] OPRF RowTag::key β=13 crash
+- **Before:** `RowTag::key` threw `runtime_error` if `beta_bits % 8 != 0`;
+  MPSVS config defaults to β=13 which would have crashed on wire-level use.
+- **After:** bit-aligned extraction supporting arbitrary β up to
+  `|tag|·8`. Regression via `test_mpsvs_oprf`.
+
+### [CLOSED] Schnorr / DLEQ — Fiat-Shamir recovered R not validated
+- **Before:** `schnorrVerify` / `dleqVerify` fed the FS-recovered point
+  into the challenge hash without `isValidPoint` guard.
+- **After:** explicit `isValidPoint(R)` check before hashing.
+
+### [CLOSED] N > 2 OLE Beaver triples — silently wrong
+- **Before:** `oleGenerateTriplesNParty` for N>2 XORed pairwise shares
+  without cross-terms; produced invalid triples.
+- **After:** throws hard on N>2; MPSVS is explicitly fixed at N=2 in
+  the topology spec.
+
+### [CLOSED] Chaum-Pedersen bit proof — non-boolean at commit
+- **Before:** `commitBit(b, r)` accepted any integer b; `proveBit`
+  threw at prove-time. API inconsistency; downstream soundness relied
+  on verify-time rejection.
+- **After:** `commitBit` throws for `b ∉ {0,1}` at construction.
+  Regression tests C3, C4, C7.
+
+### [CLOSED] DPSZ commit-then-verify tautology
+- **Before:** `openWithMacCheckShared` computed commit and re-computed
+  from same locals — always trivially matched, provided no binding.
+- **After:** explicit two-phase API (`computeSigmaCommit` /
+  `verifySigmaReveal`) that a wire-level impl replicates byte-for-byte.
+  Adversarial test `test_mpsvs_auth_share_dpsz::C7` proves post-commit
+  tamper is caught.
+
+### [CLOSED] Batch Ω-check — local r sampling
+- **Before:** `batchOpenWithMacCheckShared` sampled `r_i` locally per
+  element inside the reconstruction loop, allowing adaptive tamper
+  attacks.
+- **After:** `r_j` derived deterministically via Fiat-Shamir over the
+  full share transcript SHA-256; unpredictable to any adversary who has
+  not yet committed shares. Regression test C8.
+
+### [CLOSED] α_i = 0 edge case
+- **Before:** `generateAlpha` rejected only `α = 0` globally, not
+  individual `α_i` shares. 2^-64 probability per party per generation
+  degenerates σ_i = -m_i (unblinded).
+- **After:** resamples until all α_i shares are nonzero.
+
+### Deferred to follow-up
+- **Fuzzing harness** (libFuzzer targets over `parseConfigText`,
+  `decryptBody`, `shuffleVerifyBg`, `RowTag::key`) — not yet added.
+- **Forward secrecy in `MpsvsSecureChannel`** — documented tradeoff
+  (compromise of long-term X25519 key exposes past sessions). Add
+  ephemeral-key handshake if regulator requires post-compromise
+  security.
+- **Constant-time σ_i computation** — variable-time `α_i·x - m_i` is
+  acceptable for in-process reference; wire-level should use CT
+  arithmetic or blinding.
+- **Formal verification** — no machine-checkable proofs delivered.
