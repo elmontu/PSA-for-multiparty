@@ -222,6 +222,96 @@ SharedSectorHistogram addCoverFirmsProd(const SharedSectorHistogram& cell,
 }
 
 // ---------------------------------------------------------------------------
+// Noisy-threshold release (Bun–Steinke 2016 §4).
+// See docs/PROTOCOL.md §5.12 Alg 30 for the formal pseudocode.
+//
+// Fixes three DP holes in the earlier addJointNoiseImpl + KAnonGate path:
+//
+//   (a) k-anon gate ran on the TRUE n_valid → infinite ε-loss for
+//       neighbours straddling k.  This routine gates on a NOISED count
+//       ñ = n_valid + ξ where ξ ~ N(0, σ_ξ²) with σ_ξ = 1/√(2·ρ_th).
+//       ρ_th-zCDP for the gate; τ = σ_ξ · √(2·ln(1/(2δ))) is the
+//       stability margin ensuring correctness ≥ 1 - δ.
+//
+//   (b) Raw n_valid was released; now ñ (the same noised count used for
+//       the gate decision) is what appears in the release tuple.
+//
+//   (c) Δ₂ was hardcoded and one ρ was deducted for three independent
+//       releases (hist, num, den).  Each release now uses its own
+//       per-metric Δ and its own ρ, all charged separately to the
+//       budget.
+// ---------------------------------------------------------------------------
+
+NoisyThresholdRelease noisyThresholdReleaseProd(
+    const SharedSectorHistogram& cell,
+    const DpMetricParams& p,
+    SessionAuditLog& audit_log,
+    const AbortContext& ctx) {
+
+    NoisyThresholdRelease out{};
+
+    // --- Stability-noise gate on the count.
+    //   ξ ~ N(0, σ_ξ²) with σ_ξ = Δ_count / √(2·ρ_th), Δ_count = 1.
+    const double sigma_xi = 1.0 / std::sqrt(2.0 * p.rho_threshold);
+    // Gaussian tail bound: τ = σ_ξ · √(2·ln(1/(2δ))).
+    const double tau = sigma_xi * std::sqrt(
+        2.0 * std::log(1.0 / (2.0 * p.delta_target)));
+
+    // Reconstruct the true count (semantic ref: MPC would open with
+    // shared-α MAC check).
+    const uint64_t n_valid_true = cell.n_valid.reconstruct();
+    const int64_t xi = sampleGaussianCsprng(sigma_xi);
+    const double  n_tilde_d = static_cast<double>(n_valid_true) + xi;
+
+    // Store ñ (rounded to nearest u64, clamped ≥ 0).
+    out.noised_count = (n_tilde_d < 0.0) ? 0 :
+                        static_cast<uint64_t>(std::llround(n_tilde_d));
+    out.stability_margin_tau = tau;
+
+    // Threshold: require ñ ≥ k + τ.  Suppress otherwise.
+    if (n_tilde_d < static_cast<double>(p.k_threshold) + tau) {
+        out.released   = false;
+        out.rho_spent  = p.rho_threshold;   // budget still charged for the gate
+        return out;
+    }
+
+    // --- Per-metric Gaussian noise on hist, num, den.
+    const double sigma_hist = p.delta_hist / std::sqrt(2.0 * p.rho_hist);
+    const double sigma_num  = p.delta_num  / std::sqrt(2.0 * p.rho_num);
+    const double sigma_den  = p.delta_den  / std::sqrt(2.0 * p.rho_den);
+
+    // Reconstruct sums (semantic ref).
+    const uint64_t sum_num_true = cell.sum_num.reconstruct();
+    const uint64_t sum_den_true = cell.sum_den.reconstruct();
+
+    // Add noise (per-metric σ).
+    out.noised_num = static_cast<int64_t>(sum_num_true) + sampleGaussianCsprng(sigma_num);
+    out.noised_den = static_cast<int64_t>(sum_den_true) + sampleGaussianCsprng(sigma_den);
+
+    // 3-bin histogram release: (noised sum_num, noised sum_den, noised count ñ).
+    out.noised_hist.push_back(out.noised_num
+        + sampleGaussianCsprng(sigma_hist));   // hist bin 0 contribution
+    out.noised_hist.push_back(out.noised_den
+        + sampleGaussianCsprng(sigma_hist));   // hist bin 1
+    out.noised_hist.push_back(static_cast<int64_t>(out.noised_count));   // hist bin 2 = ñ
+
+    // R26 clamp on non-negative aggregates.
+    if (out.noised_num < 0) out.noised_num = 0;
+    if (out.noised_den < 0) out.noised_den = 0;
+
+    out.released  = true;
+    out.rho_spent = p.rho_threshold + p.rho_hist + p.rho_num + p.rho_den;
+
+    // Audit log: record the release event with the ρ actually spent.
+    // (SessionAuditLog::append is only for ABORT events; success is
+    // reflected via absence of a mismatch entry.  Ctx is captured on the
+    // release tuple in `out`, propagated by the caller.)
+    (void)audit_log;
+    (void)ctx;
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // Entropy report
 // ---------------------------------------------------------------------------
 

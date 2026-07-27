@@ -60,6 +60,7 @@ set(SRCS
     "MpsvsCoverFirms.cpp"
     "MpsvsKAnonGate.cpp"
     "MpsvsAuthShare.cpp"
+    "MpsvsAuthShare128.cpp"
     "MpsvsReciprocalVerify.cpp"
     "MpsvsShuffleWire.cpp"
     "MpsvsBitProof.cpp"

@@ -779,6 +779,22 @@ target_include_directories(test_mpsvs_shared_alpha_e2e PRIVATE
     ${SODIUM_INCLUDE_DIRS}
 )
 
+# MPSVS SPDZ2k retrofit (ℤ_{2^{144}} shares — closes Cramer et al. gap).
+add_executable(test_mpsvs_spdz2k test_mpsvs_spdz2k.cpp)
+target_link_libraries(test_mpsvs_spdz2k PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_spdz2k PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS DP noisy-threshold release (Bun–Steinke stability-based gate).
+add_executable(test_mpsvs_dp_noisy_threshold test_mpsvs_dp_noisy_threshold.cpp)
+target_link_libraries(test_mpsvs_dp_noisy_threshold PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_dp_noisy_threshold PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
 # MPSVS CryptoParams (security-proof-derived parameters + cross-tool bounds).
 add_executable(test_mpsvs_crypto_params test_mpsvs_crypto_params.cpp)
 target_link_libraries(test_mpsvs_crypto_params PRIVATE volePSI ${SODIUM_LIBRARIES})

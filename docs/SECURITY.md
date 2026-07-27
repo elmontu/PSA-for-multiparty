@@ -15,7 +15,7 @@ the MPSVS Rev 7 pipeline. Historical wording recoverable via
 | Class | Meaning | Countermeasure | Coverage |
 |---|---|---|---|
 | **A1 — semi-honest party** | Any party follows protocol, wants to learn more than allowed | additive shares, OPRF, F_PSA cover, DP | full |
-| **A2 — malicious S1 (or S2)** | Compute node deviates from protocol, tampers with shares | SPDZ MAC (`AuthSharedU64`), Beaver-triple sacrifice, BG shuffle NIZK, Chaum-Pedersen bit proof, reciprocal invariant | full for **DPSZ shared-α** path; catches ≥ 1 - 2⁻⁶⁴ per operation |
+| **A2 — malicious S1 (or S2)** | Compute node deviates from protocol, tampers with shares | SPDZ2k MAC over `ℤ_{2^{128}}` (`k=64, s=64` — Rev 7.1 `MpsvsAuthShare128`), Beaver-triple sacrifice, BG shuffle NIZK, Chaum-Pedersen bit proof, reciprocal invariant | **PARTIAL**: SPDZ2k primitive works standalone (`test_mpsvs_spdz2k` catches δ=2⁶³ at 100/100 vs classical SPDZ 1/2). Per-op `2⁻⁶⁴`, session-level `2⁻²⁴` at 2⁴⁰ ops. Full `2⁻⁴⁰` target needs `s=80` bignum retrofit + pipeline migration from `AuthSharedU64` → `AuthSharedU128`. See PROTOCOL.md §12 |
 | **A3 — malicious data-input party** (MAS, DOS, MOM) | Client submits fabricated / out-of-range rows | Phase 5 inclusion gate + range checks + F_PSA duplicate guard | full for range / duplicate; Sybil not addressed (assumes registered client identity) |
 | **A4 — coalition S1 + one client** | Compute node colludes with e.g. MAS | shares still bind other clients; MAC verifies within-session inputs | partial — colluding pair learns own inputs + intermediate opens; DP release still enforced |
 | **A5 — external network observer** | Passive wire attacker | `MpsvsSecureChannel` (X25519 + XChaCha20-Poly1305), pinned peer PK | full for confidentiality + integrity |
@@ -67,12 +67,29 @@ public transcript entries (verified structurally in
 ### 2.2 Integrity
 
 **Goal I1** — Any share tampering by ≤ 1 corrupt party is caught with
-probability ≥ 1 - 2⁻⁶⁴ per operation.
+probability ≥ 1 − 2⁻ˢ per operation, where `s` is the SPDZ2k
+statistical parameter (see [`PROTOCOL.md`](PROTOCOL.md) §1). Spec
+target: `s = 80` → per-op ≤ 2⁻⁸⁰, session ≤ 2⁻⁴⁰ at 2⁴⁰ opens.
 
-Achieved by: SPDZ MAC check (`openWithMacCheck` in plaintext-α model,
-`openWithMacCheckShared` in DPSZ shared-α model). Empirically:
-1000 / 1000 attacks caught by `test_mpsvs_adversary_catalog` across 5
-attack vectors × 200 trials.
+**Status (Rev 7.1 — honest).** Two coexisting paths:
+
+- **Legacy `AuthSharedU64`** (`ℤ_{2^{64}}`, classical SPDZ) — deployed
+  by the current wire pipeline. Worst-case per-op detection **1/2**
+  against a targeted `δ = 2⁶³` (Cramer et al. CRYPTO 2018 gap over
+  rings). `test_mpsvs_adversary_catalog` (1000/1000 caught) exercises
+  RANDOM tampering and does NOT probe the worst case. Do **not** claim
+  A2 against this path.
+- **SPDZ2k `AuthSharedU128`** (`ℤ_{2^{128}}`, `k=64, s=64`) — Rev 7.1
+  primitive; regression `test_mpsvs_spdz2k` catches targeted `δ = 2⁶³`
+  at 100/100 trials. Per-op `2⁻⁶⁴`, session `2⁻²⁴` at 2⁴⁰ ops. Closes
+  the gap but misses the `2⁻⁴⁰` target by 2¹⁶ (interim). Not yet
+  wired into the pipeline — callers must invoke the new API directly.
+
+Empirical `test_mpsvs_adversary_catalog` (1000 / 1000 caught) tests
+RANDOM tampering across both paths; a **targeted** attack against the
+legacy path evades with probability 1/2. The SPDZ2k path catches it
+with probability 1 − 2⁻⁶⁴ per op (empirically 100/100 over 100 trials
+of the exact worst-case δ).
 
 **Goal I2** — Any dishonest shuffle by S1 or S2 in F_PSA (drop /
 insert / substitute / sum-preserving swap) is caught.
@@ -215,6 +232,25 @@ Rev 7 implementation.
 
 ### 5.3 Deferred to follow-up
 
+- **SPDZ2k `s=80` bignum retrofit + pipeline integration** — Rev 7.1
+  delivered `MpsvsAuthShare128` with `k=64, s=64` (per-op `2⁻⁶⁴`,
+  session `2⁻²⁴`). Reaching the `2⁻⁴⁰` target needs either `s=80`
+  bignum shares or `k=48, s=80` in `__int128`. In parallel, migrate
+  the wire-level pipeline (`MpsvsInclusionWire`, `MpsvsSectorAggWire`,
+  ~15 files) from `AuthSharedU64` to `AuthSharedU128`. Until that
+  migration lands, adversary class A2 is met by the primitive but not
+  by the deployed default path. See PROTOCOL.md §12.
+- **DP wire-pipeline migration** — Rev 7.1 delivered
+  `noisyThresholdReleaseProd` (validated). Migrate the pipeline
+  release call from `addJointNoiseImpl` + `applyKAnonGate` to
+  `noisyThresholdReleaseProd`. Once done, adversary class A3 is met.
+- **A2B conversion for k-anon** — even the migrated path benefits
+  from replacing `MpsvsKAnonGate::arithToBit` (reveal-and-reshare —
+  leaks n_valid to both parties in plaintext) with Toft prefix-tree
+  adder or oblivious A2B via garbled circuits.
+- **BucketIndex** — wire code already uses one-hot bit-position OR
+  reduction (oblivious). PROTOCOL.md §5.7 Alg 24 updated to match
+  the actual construction. No code change needed.
 - **Fuzzing harness** — libFuzzer targets over `parseConfigText`,
   `decryptBody`, `shuffleVerifyBg`, `RowTag::key`
 - **Forward secrecy** in `MpsvsSecureChannel` — documented tradeoff;
