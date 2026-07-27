@@ -74,7 +74,7 @@ bool cascadeRound(const std::vector<CascadeColumn>& incoming,
         // Tag shares stay uniformly random because data shares are uniform
         // and gf128Mul by a fixed nonzero key is a bijection. Unused
         // `sharingPrng` is kept in the signature for future OLE-based
-        // randomization (see docs/MALICIOUS_CASCADE_DESIGN.md).
+        // randomization (see docs/DESIGN.md).
         (void)sharingPrng;
         AuthShare sp_out, peer_out;
         sp_out.data   = std::move(sp_permuted.data);

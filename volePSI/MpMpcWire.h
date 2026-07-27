@@ -6,7 +6,7 @@
 // coproto::Socket. Composes on top of R34k MpOleTriple for triple gen.
 //
 // 2-party only. Higher-level building blocks (mpcBitonicSort, MPC join
-// driver) use these primitives. See docs/MPC_WIRE_DESIGN.md for the
+// driver) use these primitives. See docs/DESIGN.md for the
 // architecture and the path to N>2.
 
 #include "MpBeaverTriple.h"   // for BeaverTripleBit (re-used as triple-share container)

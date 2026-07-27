@@ -1,7 +1,7 @@
 #pragma once
 
 // Phase 6 of the N-party private-join protocol (R31). See
-// docs/PRIVATE_JOIN_DESIGN.md.
+// docs/HISTORY.md.
 //
 // After Phase 5 cross-product expansion, the output contains |windows| ·
 // M^N rows of which only |I| · M^N (intersection windows) have

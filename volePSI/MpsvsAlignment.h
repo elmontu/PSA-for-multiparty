@@ -2,7 +2,7 @@
 
 // MPSVS Phase 4 — Binned oblivious alignment realising F_PSA.
 //
-// Per docs/PROTOCOL_PI_SECTORVULN_R7.md §5.0 (F_PSA ideal functionality) and
+// Per docs/PROTOCOL.md §5.0 (F_PSA ideal functionality) and
 // its instantiation in §5.1 (secret-share bins), §5.2 (payload schema),
 // §5.3 (within-bin bitonic sort), §5.4 (WindowedMerge, R16 membership-gated),
 // §5.5 (LiveMark + CGP ComposedShuffle).

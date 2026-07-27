@@ -2,7 +2,7 @@
 
 // MPSVS Phase 1 — Local preparation & payload schema.
 //
-// Per docs/DEPLOYMENT_FULL_MPC.md Phase 1 (spec §6, §8, §12 partial).
+// Per docs/PROTOCOL.md Phase 1 (spec §6, §8, §12 partial).
 //
 // This module runs LOCALLY at each agency (MAS, DOS, MOM) BEFORE any
 // cross-agency protocol step. It produces validated, fixed-length,

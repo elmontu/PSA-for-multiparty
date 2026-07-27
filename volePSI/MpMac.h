@@ -12,7 +12,7 @@ namespace volePSI {
 namespace mpstar {
 
 // Information-theoretic MAC over GF(2^128) for the malicious-secure cascade
-// (T1 production; see docs/MALICIOUS_CASCADE_DESIGN.md).
+// (T1 production; see docs/DESIGN.md).
 //
 // Tag invariant: for a share `s` and MAC key `α`, `tag = α · s` (multiply
 // in GF(2^128) via PCLMUL). Tags are linear in `s`, so they survive XOR

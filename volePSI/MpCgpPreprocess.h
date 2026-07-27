@@ -26,8 +26,8 @@
 // SECURITY GAP: The seeded-PRNG variant here reveals the correlation
 // structure to both parties (since both derive it from the shared
 // seed). The libOTe substitution below is the security-completing
-// step. Documented in docs/MPC_WIRE_DESIGN.md and
-// docs/CGP_SHUFFLE_DESIGN.md.
+// step. Documented in docs/DESIGN.md and
+// docs/DESIGN.md.
 
 #include "MpCgpShuffle.h"
 #include "cryptoTools/Crypto/PRNG.h"

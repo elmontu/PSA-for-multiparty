@@ -2,7 +2,7 @@
 
 // Additive secret sharing over Z_2^64, simulated in-memory for N parties.
 // R34a deliverable — foundation for the full MPC variant of the private
-// join protocol. See docs/PRIVATE_JOIN_DESIGN.md.
+// join protocol. See docs/HISTORY.md.
 //
 // Threat model in this in-memory simulation: each "party" is an integer
 // index in [0, N); a SharedValue<T> stores party-indexed shares. NO

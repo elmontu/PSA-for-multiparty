@@ -1,5 +1,5 @@
 // Wire protocol for N-party table-valued private join (R33). See
-// docs/PRIVATE_JOIN_DESIGN.md. Trusted-SP threat model.
+// docs/HISTORY.md. Trusted-SP threat model.
 //
 // Protocol flow (all messages AEAD-encrypted under the SP↔sender
 // pairwise session key, derived via X25519 ECDH):
@@ -396,7 +396,7 @@ void printMpsaJoinUsage(std::ostream& os)
         "    -M  <M>    max rows per id per party (default 4); over-cap → abort\n"
         "    -v         verbose debug logs\n\n"
         "Threat model: trusted SP (SP sees plaintext sender inputs).\n"
-        "See docs/PRIVATE_JOIN_DESIGN.md for full architecture.\n";
+        "See docs/HISTORY.md for full architecture.\n";
 }
 
 } // namespace

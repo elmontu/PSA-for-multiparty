@@ -2,7 +2,7 @@
 
 // OIRA — Output-Inference-Resistant Aggregation.
 //
-// See docs/OIRA_THREAT_MODEL.md and docs/OIRA_CONSTRUCTION.md for the
+// See docs/HISTORY.md and docs/HISTORY.md for the
 // threat model + protocol spec. In brief:
 //
 //   Π_OIRA = MPSIC (cardinality) + MPSICS (aggregate) + k-anon gate

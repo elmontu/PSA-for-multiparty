@@ -48,7 +48,7 @@ namespace mpstar {
 // Limitations:
 //   - 2-party only. For N>2, generalizing requires multi-party OT
 //     extension (e.g., extending the libOTe primitive or chaining
-//     pairwise generations); see docs/MPC_WIRE_DESIGN.md.
+//     pairwise generations); see docs/DESIGN.md.
 //   - Semi-honest only. SilentOtTriple supports a malicious variant
 //     (SilentSecType::Malicious) at higher cost; documented but not
 //     yet wired through this API.
@@ -76,7 +76,7 @@ macoro::task<std::vector<BeaverTripleBit>> oleGenerateTriplesMalicious(
 // caught by the underlying 2-party OLE's security; joint corruption
 // of party 0 (the hub) with any other party is NOT covered — that
 // requires a native N-party OT-extension protocol, documented in
-// docs/MPC_WIRE_DESIGN.md as a follow-up.
+// docs/DESIGN.md as a follow-up.
 //
 // partyIdx: my party index in [0, N)
 // N: number of parties

@@ -2,7 +2,7 @@
 
 // MPSVS Phase 2 — Server-aided blind DH-OPRF over ristretto255.
 //
-// Per docs/DEPLOYMENT_FULL_MPC.md Phase 2 + docs/PROTOCOL_PI_SECTORVULN.md §2
+// Per docs/PROTOCOL.md Phase 2 + docs/PROTOCOL.md §2
 // (ThresholdDKG) + §3 (DeriveEntityKey / DeriveRowTag).
 //
 // Cryptographic construction: 2-of-2 multiplicative case of JKK 2HashTDH /

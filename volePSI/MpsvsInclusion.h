@@ -2,7 +2,7 @@
 
 // MPSVS Phase 5 — Validity, missingness, and inclusion bits.
 //
-// Per docs/DEPLOYMENT_FULL_MPC.md Phase 5 (spec §12) + Protocol §7.
+// Per docs/PROTOCOL.md Phase 5 (spec §12) + Protocol §7.
 //
 // Takes the F_PSA union output (Phase 4 UnionRow) and produces per-ratio
 // inclusion bits + entity-level (num, den) pairs for downstream ranking

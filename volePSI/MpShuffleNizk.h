@@ -28,7 +28,7 @@
 // This proves PERMUTATION-EQUALITY OF MULTISETS but NOT the cryptographic
 // soundness of full Bayer-Groth (which uses multiplicative structure).
 // The prototype is intentionally simpler so it fits in a focused session;
-// see docs/SHUFFLE_NIZK_DESIGN.md for the gap to full Bayer-Groth.
+// see docs/DESIGN.md for the gap to full Bayer-Groth.
 
 #include "MpPedersen.h"
 #include "MpRistretto.h"

@@ -1,7 +1,7 @@
 #pragma once
 
 // Phases 4 + 5 of the N-party private-join protocol (R30). See
-// docs/PRIVATE_JOIN_DESIGN.md.
+// docs/HISTORY.md.
 //
 //   Phase 4 — window detection: after oblivious sort by id (R29), tuples
 //   sharing the same id are contiguous. This module identifies window

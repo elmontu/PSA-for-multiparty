@@ -18,7 +18,7 @@ namespace mpstar {
 // who said what.
 //
 // This is the lightweight Path C "identifiable abort" from
-// docs/MALICIOUS_UPGRADE_ROADMAP.md: doesn't prevent attacks (the
+// docs/HISTORY.md: doesn't prevent attacks (the
 // info-theoretic MAC layer does that) but lets a post-protocol observer
 // prove who deviated.
 class MpTranscript {

@@ -168,7 +168,7 @@ bool shuffleVerify(
     // So this prototype's verifier is COMPLETE (accepts honest proofs)
     // but NOT SOUND in the cryptographic sense — a malicious prover
     // could choose ANY combinedOpeningShuf and we'd accept. See
-    // docs/SHUFFLE_NIZK_DESIGN.md for the gap.
+    // docs/DESIGN.md for the gap.
     //
     // What we CAN check soundly: that the sum-of-all-commitments is
     // preserved (= commit to Σ m_i). This catches a NAIVE attacker who

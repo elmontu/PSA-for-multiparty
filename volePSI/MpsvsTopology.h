@@ -3,7 +3,7 @@
 // MPSVS Phase 3 — Two-domain (S1+S2) topology, session state, and audit
 // transcript for SectorVuln.
 //
-// Per docs/DEPLOYMENT_FULL_MPC.md Phase 3 + docs/PROTOCOL_PI_SECTORVULN_R7.md §0.
+// Per docs/PROTOCOL.md Phase 3 + docs/PROTOCOL.md §0.
 //
 // Roles:
 //   S1  — MPC compute node (GovTech-operated infra); holds one share of every

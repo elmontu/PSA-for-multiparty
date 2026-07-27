@@ -21,7 +21,7 @@
 //     about handed-off R_{k+1}).
 //   - It does NOT prevent collusion: if SP and one sender share α, they
 //     can jointly forge consistent (data, tag) pairs. Full SPDZ-style
-//     active security needs OLE-based α-shares; see docs/MALICIOUS_CASCADE_DESIGN.md.
+//     active security needs OLE-based α-shares; see docs/DESIGN.md.
 
 #include "MpMac.h"
 

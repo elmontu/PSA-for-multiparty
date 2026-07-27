@@ -2,7 +2,7 @@
 
 // MPC variants of join Phases 4-6 (R34g + R34h + R34i) + end-to-end
 // in-memory driver (R34j) for the SP-blind private join. See
-// docs/PRIVATE_JOIN_DESIGN.md.
+// docs/HISTORY.md.
 //
 // All operations work on secret-shared data (XOR-shared bits or
 // arithmetic-shared u64). No party — including SP — reconstructs any

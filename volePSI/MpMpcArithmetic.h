@@ -2,7 +2,7 @@
 
 // Secure 64-bit addition and subtraction on XOR-shared bit representations.
 // Foundations for the SP-blind vulnerability-score protocol (see
-// docs/DESIGN_VULN_SCORE.md).
+// docs/HISTORY.md).
 //
 // The MPC arithmetic surface prior to this file: additive shares
 // (`SharedU64`) have free add/sub but no compare, and bit-shares

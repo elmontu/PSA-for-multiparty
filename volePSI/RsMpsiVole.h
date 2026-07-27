@@ -14,7 +14,7 @@ namespace volePSI {
 // as the common party.
 //
 // Status: SCAFFOLD ONLY. Bodies throw at runtime until upstream API is wired.
-// See docs/DEFERRED_AUDITS.md for the integration checklist.
+// See docs/SECURITY.md for the integration checklist.
 
 class RsMpsiVoleSender : public details::RsSimpleHashPsiBase, public oc::TimerAdapter {
 public:

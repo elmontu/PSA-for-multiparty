@@ -306,7 +306,7 @@ macoro::task<void> runSpRole(uint32_t N, int basePort, const std::string& outPat
         // Laplace mechanism: C_tilde = C + Lap(1/epsilon). For prototype,
         // we just log the noisy value SP would release; the real release
         // mechanism (and composition accounting across runs) is documented
-        // in docs/DP_CARDINALITY_DESIGN.md.
+        // in docs/DESIGN.md.
         // Simple Laplace via inverse CDF of uniform U ~ Uniform(-0.5, 0.5):
         //   X = -sign(U) * scale * ln(1 - 2*|U|)
         std::array<uint8_t, 8> u_bytes;
@@ -651,7 +651,7 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
     // and > real C, the sender pads c_i with PRNG-random blocks. After the
     // cascade these padded "dummy" rows are mixed with real intersection
     // rows in the output. SP still learns C from MPSI itself (residual
-    // leak — see docs/CARDINALITY_HIDING_DESIGN.md for full-hiding plan).
+    // leak — see docs/DESIGN.md for full-hiding plan).
     uint64_t Ceff = std::max(C, padCmax);
     LOG << "[S" << selfIdx << "] padding C=" << C << " to Ceff=" << Ceff
         << " (cardinality-hiding from downstream)\n";
@@ -771,7 +771,7 @@ macoro::task<void> runSenderRole(uint32_t N, uint32_t selfIdx, int basePort,
     // (in the current single-recipient topology this can't happen; but
     // commitments still bind sender j to the value, enabling non-repudiation
     // if a dispute arises after the protocol). With T1's full info-theoretic
-    // MAC layer (see docs/MALICIOUS_CASCADE_DESIGN.md) this generalizes to
+    // MAC layer (see docs/DESIGN.md) this generalizes to
     // catching wrong-r in the cascade too.
     using volePSI::mpstar::serializeBlocks;
     using volePSI::mpstar::deserializeBlocks;
@@ -946,7 +946,7 @@ static void printMpsaUsage(std::ostream& os)
         "    -pq        post-quantum hybrid SP↔sender handshake\n"
         "               (X25519 + KEM; currently uses StubKem placeholder.\n"
         "                Real ML-KEM/Kyber-768 swap-in via liboqs documented\n"
-        "                in docs/PQ_HYBRID_HANDSHAKE_DESIGN.md)\n"
+        "                in docs/DESIGN.md)\n"
         "    -mink <K>  threshold-k revelation: SP aborts if |I| < K\n"
         "               (k-anonymity policy; SP commits to K before MPSI runs)\n"
         "    -dp <eps>  DP-protected cardinality release (epsilon > 0)\n"
@@ -954,7 +954,7 @@ static void printMpsaUsage(std::ostream& os)
         "    -auth-dir <dir>  long-term identity directory (Ed25519 .pk files)\n"
         "                     If set, parties authenticate ephemeral pubkeys\n"
         "                     against pre-distributed long-term identities.\n"
-        "                     See docs/AUTHENTICATED_HANDSHAKE_DESIGN.md\n"
+        "                     See docs/DESIGN.md\n"
         "    -no-salt-mpsi    Disable per-session-salted MPSI (T15). DEFAULT IS ON.\n"
         "                     Without salt, SP picks the MPSI aesKey and can\n"
         "                     dictionary-attack the AES(aesKey,id) hash lists to\n"
@@ -970,7 +970,7 @@ static void printMpsaUsage(std::ostream& os)
         "                     cascade. Closes SP dictionary-attack (C2) via real OPRF\n"
         "                     for senders 1..N-1; note that sender 0's raw set is\n"
         "                     revealed to SP in the cascade (design trade-off).\n"
-        "                     See docs/FIX_STAGE_B_MPSI_VOLE.md.\n"
+        "                     See docs/HISTORY.md.\n"
         "    -no-integrity-check  Disable A-sum per-column shuffle integrity. DEFAULT IS ON.\n"
         "                     With A-sum, each sender commits to Σ hash(payload)\n"
         "                     per column BEFORE the cascade; SP verifies the\n"
@@ -986,7 +986,7 @@ static void printMpsaUsage(std::ostream& os)
         "  frontend -mpsa -N 3 -r 0\n"
         "  frontend -mpsa -N 3 -r 1 -i 0 -in dataset/sender_0.csv\n"
         "\n"
-        "See README.md and docs/RESEARCH_MPSI.md for protocol details.\n";
+        "See README.md and docs/HISTORY.md for protocol details.\n";
 }
 
 void doFileMpsa(CLP& cmd)
@@ -1034,13 +1034,13 @@ void doFileMpsa(CLP& cmd)
     // peer; production runs must not disable this.
     bool mpsiSalted = !cmd.isSet("no-salt-mpsi");
     // Stage A per-column shuffle-integrity check (default on). See
-    // MpsaShuffleIntegrity.h + docs/FIX_A_SUM_INTEGRITY.md for the protocol.
+    // MpsaShuffleIntegrity.h + docs/HISTORY.md for the protocol.
     bool integrityCheckOn = !cmd.isSet("no-integrity-check");
     // Stage B: MPSI backend selection. Default is the legacy simple-hash
     // backend (semi-honest + T15 salt); "-mpsi-backend vole" switches to the
     // vendored ladnir/volepsi 2PC VOLE-PSI cascade (real OPRF, closes C2
     // dictionary attack for senders 1..N-1; sender 0's raw set leaks to SP
-    // by construction of the cascade). See docs/FIX_STAGE_B_MPSI_VOLE.md.
+    // by construction of the cascade). See docs/HISTORY.md.
     std::string mpsiBackend = cmd.getOr<std::string>("mpsi-backend",
                                                      std::string("simplehash"));
     bool useVoleMpsi = (mpsiBackend == "vole");

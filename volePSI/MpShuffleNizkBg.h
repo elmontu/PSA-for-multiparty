@@ -25,7 +25,7 @@
 // contents are already public post-alignment. If a hiding-shuffle NIZK is
 // needed for a different use case, upgrade to the full Bayer-Groth
 // EUROCRYPT 2012 §5 recursive partial-product argument (a considerably
-// larger construction; documented in docs/SHUFFLE_NIZK_DESIGN.md).
+// larger construction; documented in docs/DESIGN.md).
 
 #include "MpRistretto.h"
 #include "MpPedersen.h"

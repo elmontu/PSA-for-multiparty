@@ -5,7 +5,7 @@
 namespace volePSI {
 
 // Entry point for the N-party table-valued private join wire protocol
-// (R33). See docs/PRIVATE_JOIN_DESIGN.md.
+// (R33). See docs/HISTORY.md.
 //
 // Privacy model: trusted-SP semantics. After AEAD decryption SP sees
 // plaintext sender inputs. This is a deliberate weaker privacy model

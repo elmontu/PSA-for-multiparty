@@ -2,7 +2,7 @@
 
 // MPSVS Phase 6 — Bucket indexing + Goldschmidt reciprocal.
 //
-// Per docs/PROTOCOL_PI_SECTORVULN_R7.md §8.1 (BucketIndex) + §8.1.1
+// Per docs/PROTOCOL.md §8.1 (BucketIndex) + §8.1.1
 // (Goldschmidt convergence annex) + §9 fixed-point convention (k=128, f=40,
 // guard=8). Enabled by the Rev 7 refactor that treats ranking as a
 // bucket-histogram problem (§8) so per-entity secure division is not needed.

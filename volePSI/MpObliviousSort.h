@@ -2,7 +2,7 @@
 
 // In-memory simulation of a data-oblivious bitonic sort of (key, payload)
 // pairs. Foundation of the N-party private-join protocol — see
-// docs/PRIVATE_JOIN_DESIGN.md, Phase 3.
+// docs/HISTORY.md, Phase 3.
 //
 // Properties this implementation guarantees:
 //   1. STRUCTURAL OBLIVIOUSNESS: the sequence of compare-and-swap

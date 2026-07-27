@@ -352,8 +352,7 @@ magnitude below signal. Full run: `test_mpsvs_scale_1M`.
 Two full rounds of multi-agent security audit (parallel Gemini
 reviewers + Explore agent for cross-cutting concerns) surfaced and
 resolved critical findings. Full log in
-[`docs/DEFERRED_AUDITS.md`](docs/DEFERRED_AUDITS.md) §"MPSVS Rev 7
-cleanup".
+[`docs/SECURITY.md`](docs/SECURITY.md) §5 "Audit findings".
 
 ### Cycle 1 — post-crypto-primitive delivery
 
@@ -396,20 +395,17 @@ cleanup".
 
 ## Documentation
 
-39 design + audit docs in [`docs/`](docs/). Load-bearing ones:
+Four consolidated documents in [`docs/`](docs/):
 
-| Doc | Topic |
+| Doc | Contents |
 |---|---|
-| [`PROTOCOL_PI_SECTORVULN_R7.md`](docs/PROTOCOL_PI_SECTORVULN_R7.md) | Full Π_SECTORVULN Rev 7 specification |
-| [`DEPLOYMENT_FULL_MPC.md`](docs/DEPLOYMENT_FULL_MPC.md) | 12-phase deployment walkthrough |
-| [`SECURITY_ANALYSIS.md`](docs/SECURITY_ANALYSIS.md) | Threat model + security-goals matrix |
-| [`SHUFFLE_NIZK_DESIGN.md`](docs/SHUFFLE_NIZK_DESIGN.md) | Bayer-Groth shuffle NIZK (with post-audit status banner on closed gap) |
-| [`MPC_WIRE_DESIGN.md`](docs/MPC_WIRE_DESIGN.md) | Wire-level MPC (`SilentOtTriple`, coproto sockets) |
-| [`MALICIOUS_UPGRADE_ROADMAP.md`](docs/MALICIOUS_UPGRADE_ROADMAP.md) | Semi-honest → malicious upgrade path |
-| [`DP_THRESHOLD_TRANSCRIPT_DESIGN.md`](docs/DP_THRESHOLD_TRANSCRIPT_DESIGN.md) | zCDP composition + release-transcript design |
-| [`COMPOSITE_SECURITY_THEOREM.md`](docs/COMPOSITE_SECURITY_THEOREM.md) | Cross-phase composition argument |
-| [`PRIVACY_AUDIT_R37.md`](docs/PRIVACY_AUDIT_R37.md) | Per-layer privacy audit (all 15 layers) |
-| [`DEFERRED_AUDITS.md`](docs/DEFERRED_AUDITS.md) | Historical + closed audit findings |
+| [`PROTOCOL.md`](docs/PROTOCOL.md) | Π_SECTORVULN Rev 7 specification: parties, 12 phases, deployment topology, session lifecycle, change control |
+| [`SECURITY.md`](docs/SECURITY.md) | Threat model (A1–A6 in scope; B1–B6 explicit out-of-scope), security goals (C, I, DP, AC), composite security theorem, per-layer privacy audit, all closed and deferred audit findings |
+| [`DESIGN.md`](docs/DESIGN.md) | Cryptographic-primitive designs: SPDZ MAC (plaintext-α + DPSZ shared-α), OLE Beaver preprocessing, threshold-DH-OPRF + DLEQ + bias-frozen DKG, BG shuffle NIZK (sound-with-reveal), Chaum-Pedersen bit proof, reciprocal verify, DP joint noise transcript, `MpsvsSecureChannel`, `MpsvsKeyStore`, cover firms |
+| [`HISTORY.md`](docs/HISTORY.md) | Repository history from the 2-party PSA paper through R25–R37 and MPSVS Rev 7; superseded designs (SALTED_MPSI, both-blind, vuln-score V1/V2, malicious cascade, PQ handshake) recoverable via `git log --follow` |
+
+Prior 39-document layout consolidated into these four on 2026-07-27
+(see [`HISTORY.md`](docs/HISTORY.md) for the mapping).
 
 ---
 
@@ -446,14 +442,13 @@ Smoke: `./tests/run_mpsa_smoke.sh`
 
 ### Table-valued private join (`-mpsa-join`) and SP-blind MPC (`-mpsa-join-mpc`)
 
-See [`docs/PRIVATE_JOIN_DESIGN.md`](docs/PRIVATE_JOIN_DESIGN.md) and
-[`docs/MPC_WIRE_DESIGN.md`](docs/MPC_WIRE_DESIGN.md).
+See [`docs/HISTORY.md`](docs/HISTORY.md) §"R29 – R32" and §"R34k".
 
 ### Verifiable shuffle NIZK
 
 - `MpShuffleNizk` (R27 prototype, semi-sound)
 - `MpShuffleNizkBg` (**R27b — soundness gap CLOSED per MPSVS Rev 7
-  cleanup**; see [`docs/SHUFFLE_NIZK_DESIGN.md`](docs/SHUFFLE_NIZK_DESIGN.md))
+  cleanup**; see [`docs/DESIGN.md`](docs/DESIGN.md) §4)
 
 ### Double-blind XGBoost VFL demo
 
