@@ -118,44 +118,22 @@ bool test_bg_random_msg_swap_caught_by_product() {
     realShufMsg[0] = shifted_m0;
     realShufMsg[1] = shifted_m1;
 
-    // The prover here is the legitimate party who actually applied the
-    // permutation to the ORIGINAL messages and would compute the proof
-    // honestly — but the SHUFFLED commitments now hold tampered values.
-    // We simulate this: prover uses the ORIGINAL `messages` vector and
-    // honest openings; verifier sees the tampered shufC.
+    // Sum-preserving multiset tampering (previously the documented R27b
+    // gap). Since the fix, shuffleVerifyBg recomputes both products from
+    // the revealed messages after checking each opening binds to its
+    // commitment — so this attack is now CAUGHT by the product check.
     //
-    // The product check Π (x - m_i - y) on the ORIGINAL side uses real
-    // messages; the verifier's check is on what's CLAIMED in the proof.
-    // The sum-of-commitments check catches: Σ orig messages = Σ shuf
-    // messages still holds (preserved by the swap). But product values
-    // diverge.
-    //
-    // Note: prover doesn't KNOW about the tampering, so its computed
-    // productShuf uses the ORIGINAL messages (matches productOrig); the
-    // verifier doesn't recompute either product — so the verifier
-    // accepts! This is the documented gap. The full Bayer-Groth fix is
-    // to commit to the product chain.
-    //
-    // What this test actually exercises: the honest-prover path
-    // produces productOrig == productShuf, sum check passes (since the
-    // tampering preserved sum) — verifier WRONGLY accepts. This is the
-    // residual gap.
-    //
-    // We assert the prototype DOES wrongly accept this attack (which is
-    // documented as the gap), to make the limitation visible in the test
-    // output.
+    // The prover here is honest but sees the tampered shufC and legitimate
+    // openings for it. When the verifier re-derives commitments using the
+    // prover's revealed messages+openings, the binding check catches the
+    // substitution.
     auto proof = mp::shuffleProveBg(
         s.messages, s.openingsOrig, s.openingsShuf, s.permutation,
         s.origC, s.shufC);
 
-    bool wronglyAccepted = mp::shuffleVerifyBg(proof, s.origC, s.shufC);
-    if (wronglyAccepted) {
-        std::cerr << "  (documented limitation: sum-preserving multiset "
-                  << "tampering passes without product-chain commitment)\n";
-    }
-    // For the prototype, this is the EXPECTED behavior. The test asserts
-    // the prototype's KNOWN limitation rather than full soundness.
-    return wronglyAccepted;
+    // Expected: verifier REJECTS (return value of the test = detection).
+    bool rejected = !mp::shuffleVerifyBg(proof, s.origC, s.shufC);
+    return rejected;
 }
 
 bool test_bg_random_corruption_caught_by_sum() {
@@ -194,7 +172,7 @@ int main() {
         {"bg_honest_accepts",                  test_bg_honest_accepts},
         {"bg_message_substitution_caught",     test_bg_message_substitution_caught},
         {"bg_random_corruption_caught_by_sum", test_bg_random_corruption_caught_by_sum},
-        {"bg_random_msg_swap_documented_gap",  test_bg_random_msg_swap_caught_by_product},
+        {"bg_sum_preserving_swap_now_caught",  test_bg_random_msg_swap_caught_by_product},
         {"bg_fs_challenge_tamper_caught",      test_bg_fs_challenge_tamper_caught},
     };
     int failures = 0;

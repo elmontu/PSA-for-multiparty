@@ -1,0 +1,46 @@
+# MPSVS Configuration — regulator sign-off required for changes.
+# Any change to this file changes configHash and appears in the
+# audit chain via a CONFIG_LOAD entry.
+#
+# Format: key = value, one per line. Comments start with '#'.
+# Unknown keys are silently ignored (forward-compatibility). Missing
+# keys use defaults defined in MpsvsConfig.h.
+
+# ─── Differential privacy (Phase 12) ───────────────────────────────
+# zCDP ρ budget per release. Must be in (0, 1].
+dp_rho_per_query = 0.1
+# Total zCDP ρ budget over full protocol lifetime.
+dp_rho_budget = 3.0
+# δ for (ε, δ)-DP conversion.
+dp_delta = 1e-6
+# C_max — contribution clip for sum queries.
+dp_contribution_clip = 1000000.0
+
+# ─── k-anonymity gate (Phase 17) ───────────────────────────────────
+# Suppress released cells with fewer than this many valid firms.
+k_anon_threshold = 5
+
+# ─── Cover firms (Phase 12+) ───────────────────────────────────────
+# Number of injected cover firms K ~ Uniform[cover_k_min, cover_k_max].
+cover_k_min = 3
+cover_k_max = 15
+
+# ─── F_PSA alignment (Phase 4) ─────────────────────────────────────
+# Bin structure: 2^β bins, keys of τ bits, cap cap_P per party per bin.
+bin_beta = 13
+bin_tau_bits = 71
+bin_cap_per_party = 256
+
+# ─── Fixed-point encoding (Rev 7 §9) ───────────────────────────────
+# x stored as x · 2^f. Guard bits reserved to detect overflow.
+fp_fractional_bits = 40
+fp_guard_bits = 8
+
+# ─── Bucketing (Phase 6 + §8) ──────────────────────────────────────
+# Number of buckets B. Rev 7 R27 break-even. Must be a power of 2.
+bucket_count = 128
+
+# ─── Operational ───────────────────────────────────────────────────
+audit_log_path = /var/log/mpsvs/audit.log
+metrics_bind = 0.0.0.0:9090
+max_concurrent_sessions = 4

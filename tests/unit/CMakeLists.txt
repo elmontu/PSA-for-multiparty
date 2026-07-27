@@ -634,3 +634,164 @@ target_include_directories(test_mpsvs_mom_flow PRIVATE
     ${CMAKE_SOURCE_DIR}
     ${SODIUM_INCLUDE_DIRS}
 )
+
+# MPSVS Phase 17.1 — MAC-authenticated shares (SPDZ-style malicious detection).
+add_executable(test_mpsvs_auth_share test_mpsvs_auth_share.cpp)
+target_link_libraries(test_mpsvs_auth_share PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_auth_share PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS Phase 17.1-ext — SPDZ sacrifice check + batched MAC verification.
+add_executable(test_mpsvs_sacrifice test_mpsvs_sacrifice.cpp)
+target_link_libraries(test_mpsvs_sacrifice PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_sacrifice PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS Phase 17.7 — comprehensive malicious adversary catalog.
+add_executable(test_mpsvs_adversary_catalog test_mpsvs_adversary_catalog.cpp)
+target_link_libraries(test_mpsvs_adversary_catalog PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_adversary_catalog PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS Phase 17.6 — reciprocal consistency check (Goldschmidt output verify).
+add_executable(test_mpsvs_reciprocal_verify test_mpsvs_reciprocal_verify.cpp)
+target_link_libraries(test_mpsvs_reciprocal_verify PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_reciprocal_verify PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS Phase 17.4 — Bayer-Groth shuffle NIZK for CGP shuffle.
+add_executable(test_mpsvs_shuffle_nizk test_mpsvs_shuffle_nizk.cpp)
+target_link_libraries(test_mpsvs_shuffle_nizk PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_shuffle_nizk PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS Phase 17.5 — bit membership proof (Chaum-Pedersen OR).
+add_executable(test_mpsvs_bit_proof test_mpsvs_bit_proof.cpp)
+target_link_libraries(test_mpsvs_bit_proof PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_bit_proof PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS Phase 17.2 — OLE-based Beaver triple generation over sockets.
+add_executable(test_mpsvs_ole_integration test_mpsvs_ole_integration.cpp)
+target_link_libraries(test_mpsvs_ole_integration PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_ole_integration PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS Phase 17 CAPSTONE — malicious-secure E2E demo.
+add_executable(test_mpsvs_malicious_e2e test_mpsvs_malicious_e2e.cpp)
+target_link_libraries(test_mpsvs_malicious_e2e PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_malicious_e2e PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS Production Hygiene — CSPRNG + memzero + structured abort.
+add_executable(test_mpsvs_prod_hygiene test_mpsvs_prod_hygiene.cpp)
+target_link_libraries(test_mpsvs_prod_hygiene PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_prod_hygiene PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS Prod-Retrofit — hardened AuthShare (SecureAlpha + Result + audit log).
+add_executable(test_mpsvs_auth_share_prod test_mpsvs_auth_share_prod.cpp)
+target_link_libraries(test_mpsvs_auth_share_prod PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_auth_share_prod PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS DP Prod-Retrofit — CSPRNG-backed Gaussian + audit-log integration.
+add_executable(test_mpsvs_dp_prod test_mpsvs_dp_prod.cpp)
+target_link_libraries(test_mpsvs_dp_prod PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_dp_prod PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS Audit persistence + Prometheus metrics.
+add_executable(test_mpsvs_audit_metrics test_mpsvs_audit_metrics.cpp)
+target_link_libraries(test_mpsvs_audit_metrics PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_audit_metrics PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS Config — parameter config with validation + change control.
+add_executable(test_mpsvs_config test_mpsvs_config.cpp)
+target_link_libraries(test_mpsvs_config PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_config PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS Constant-time primitives.
+add_executable(test_mpsvs_const_time test_mpsvs_const_time.cpp)
+target_link_libraries(test_mpsvs_const_time PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_const_time PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS KeyStore (encrypted-at-rest + HSM stub).
+add_executable(test_mpsvs_key_store test_mpsvs_key_store.cpp)
+target_link_libraries(test_mpsvs_key_store PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_key_store PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS SecureChannel (libsodium authenticated encrypted channel).
+add_executable(test_mpsvs_secure_channel test_mpsvs_secure_channel.cpp)
+target_link_libraries(test_mpsvs_secure_channel PRIVATE volePSI ${SODIUM_LIBRARIES} pthread)
+target_include_directories(test_mpsvs_secure_channel PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS shared-α DPSZ MAC-check (α never reconstructed).
+add_executable(test_mpsvs_auth_share_dpsz test_mpsvs_auth_share_dpsz.cpp)
+target_link_libraries(test_mpsvs_auth_share_dpsz PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_auth_share_dpsz PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS shared-α end-to-end (Beaver mult + sacrifice + reciprocal verify).
+add_executable(test_mpsvs_shared_alpha_e2e test_mpsvs_shared_alpha_e2e.cpp)
+target_link_libraries(test_mpsvs_shared_alpha_e2e PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_shared_alpha_e2e PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS CryptoParams (security-proof-derived parameters + cross-tool bounds).
+add_executable(test_mpsvs_crypto_params test_mpsvs_crypto_params.cpp)
+target_link_libraries(test_mpsvs_crypto_params PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_crypto_params PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)
+
+# MPSVS scale test — 1M firms × 20 sectors × MAS=10%. Semantic-reference
+# Phase 5+11+12 to demonstrate end-to-end release feasibility.
+add_executable(test_mpsvs_scale_1M test_mpsvs_scale_1M.cpp)
+target_link_libraries(test_mpsvs_scale_1M PRIVATE volePSI ${SODIUM_LIBRARIES})
+target_include_directories(test_mpsvs_scale_1M PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${SODIUM_INCLUDE_DIRS}
+)

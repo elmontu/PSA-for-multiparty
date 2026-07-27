@@ -210,13 +210,184 @@ with Fiat-Shamir.
   computational binding).
 - `volePSI/MpShuffleNizk.*` — R27 prototype (Schwartz-Zippel on
   weighted-sum polynomial evaluation).
-- `volePSI/MpShuffleNizkBg.*` — R27b Bayer-Groth-inspired with
-  cryptographic sum-of-commitments homomorphism check; residual gap
-  (sum-preserving multiset tampering) documented.
+- `volePSI/MpShuffleNizkBg.*` — Bayer-Groth-inspired shuffle argument.
+  The earlier R27b residual gap (sum-preserving multiset tampering that
+  was uncaught because the verifier trusted the prover's product claim)
+  has been **closed**: the verifier now independently recomputes both
+  products from revealed messages after checking each opening binds to
+  its commitment. The construction is sound (Schwartz-Zippel over
+  ~2^252-element field) but reveals the messages — an acceptable trade
+  for MPSVS Phase 4 where bin contents are public post-alignment. Full
+  hiding requires Bayer-Groth §5 recursive partial-product argument
+  (out of scope).
+
+## MPSVS Π_SECTORVULN Rev 7 — malicious-secure sector-level statistics
+
+MPSVS is a domain-specific MPC pipeline for regulator-controlled release
+of sector-level vulnerability statistics (financial soundness ratios like
+DTI, DSI, DEmp, IPW, Delq, NPL, UnsecShare, StDebtShare) without exposing
+any single firm's data. The 5-party topology mirrors an in-progress
+Singapore inter-agency setting:
+
+| Party | Role |
+|---|---|
+| **MAS** | data-input (loan/debt/npl) — covers licensed-borrower subset (~10% of firm universe) |
+| **DOS** | data-input (income / revenue / surplus) — covers all registered firms |
+| **MOM** | data-input (employment / labour / vacancy) — covers all registered firms |
+| **S1, S2** | non-colluding MPC compute nodes (SPDZ-style) |
+| **GT (GovTech)** | orchestrator; publishes ctx + policy Φ; receives DP-noised release; **holds no share, key, or payload** |
+
+The pipeline runs 12 protocol phases: OPRF-derived row tags → F_PSA
+alignment → inclusion → bucketing → ranking → composite score →
+percentiles → sector aggregation → DP joint noise → release with
+audit chain.
+
+### Phase 17 — malicious-secure sub-protocols
+
+Added on top of the Rev 7 semi-honest baseline. Each catches a specific
+class of active adversary.
+
+- **17.1 SPDZ MAC-authenticated shares** (`MpsvsAuthShare.{h,cpp}`,
+  `MpsvsAuthShareProd.{h,cpp}`) — every share carries a MAC `α·x`; any
+  share tampering is caught on open. Two variants:
+  - Plaintext-α (`openWithMacCheck`) — legacy single-verifier /
+    trusted-auditor model. Kept for backward compat.
+  - **Shared-α DPSZ 2012 §3.3** (`openWithMacCheckShared`,
+    `authSecureMultiplyShared`, `sacrificeCheckTripleShared`,
+    `verifyReciprocalAuthShared`) — α remains additively shared for the
+    entire session; neither S1 nor S2 ever reconstructs it. σ_i =
+    α_i·x - m_i checked via commit-then-open protocol. This is the
+    correct primitive for a fully-malicious S1 vs S2 threat model.
+    Batched Ω-check uses Fiat-Shamir-derived challenges (unpredictable
+    to adversary who has not yet committed to shares).
+
+- **17.2 OLE-based Beaver triples** (`MpOleAlpha.*`, `MpOleTriple.*`) —
+  removes the trusted-dealer assumption via libOTe `SilentOtTriple`
+  under LPN. N=2 supported; N>2 explicitly guarded (throws) pending a
+  native N-party OLE.
+
+- **17.3 OPRF DLEQ + Schnorr** (`MpsvsOprf.cpp`) — every OPRF hop
+  carries a Chaum-Pedersen DLEQ proof; Schnorr and DLEQ verify both
+  validate the Fiat-Shamir-recovered group element before hashing
+  (defence-in-depth).
+
+- **17.4 Bayer-Groth shuffle NIZK** — see "Verifiable shuffle NIZK"
+  section above. Soundness gap closed.
+
+- **17.5 Chaum-Pedersen OR bit proof** (`MpsvsBitProof.{h,cpp}`) —
+  proves committed value ∈ {0, 1}. `commitBit` enforces the bit
+  precondition at construction (throws for non-boolean input) —
+  stricter than the earlier "verify-time rejection" pattern.
+
+- **17.6 Reciprocal algebraic verification** (`MpsvsReciprocalVerify.*`)
+  — after a Goldschmidt reciprocal, check y_fp · x ≈ 2^f via
+  authenticated Beaver mult. Catches malicious server returning wrong
+  reciprocal. Shared-α variant available.
+
+### Production hardening (9 modules)
+
+Retrofit lifting MPSVS from "malicious-secure crypto primitive" to
+"deployable production system." Each module addresses a specific
+regulator-facing operational concern.
+
+| Module | Purpose |
+|---|---|
+| `MpsvsProdHygiene` | CSPRNG (libsodium `randombytes_buf`), `SecureU64`/`SecureBuffer` RAII (memzero on scope exit), `AbortReport` hash-chain, `Result<T>` |
+| `MpsvsConfig` | Runtime-loadable operational params (ρ budget, k-anon threshold, cover K range, bucketing, log paths); SHA-256 canonical hash for change-control audit chain |
+| `MpsvsCryptoParams` | Security-proof-derived params (λ, σ_stat, MAC field, batch sizes, LPN regime); cross-parameter validation tied to math suite (`breakEvenBucketCount(n)`, `minSacrificeBatch(σ, k)`, `maxDpDelta(σ)`) |
+| `MpsvsConstTime` | Branch-free `ctEq`/`ctLt`/`ctMux` for secret-dependent comparators + `ctMemcmpEq` via libsodium |
+| `MpsvsKeyStore` | Encrypted-at-rest key persistence (libsodium `secretstream_xchacha20poly1305` + Argon2id passphrase KDF). Includes `HsmKeyStore` stub with documented PKCS#11 attachment point |
+| `MpsvsSecureChannel` | Mutually-authenticated encrypted byte channel (X25519 `crypto_kx` + XChaCha20-Poly1305), MITM detection via peer-public-key pinning, clean TAG_FINAL shutdown |
+| `MpsvsAuditPersist` | Append-only tamper-evident file with SHA-256 hash chain (survives crash, verify on load) |
+| `MpsvsMetrics` | Prometheus text-format counters, gauges, histograms (mpsvs_mac_check_total, mpsvs_abort_total, mpsvs_rho_spent, ...) |
+| `MpsvsTopology` | Per-session state machine: DKG → OPRF → per-role client state + SP-audit transcript |
+
+### Scale test — 1 000 000 firms × 20 sectors × MAS = 10 % subset
+
+`tests/unit/test_mpsvs_scale_1M` runs the semantic-reference pipeline
+end-to-end. Panel: 1M firms, 20 sectors (uniform ≈ 50 000 firms /
+sector), MAS covers 100 474 firms (10.0 %), DOS + MOM cover all.
+
+Single-threaded wall-clock:
+
+| Phase | Time |
+|---|---|
+| Panel generate | ~100 ms |
+| Phase 5 inclusion | ~170 ms |
+| Phase 11 sector aggregation (9 metrics × 20 sectors) | ~490 ms |
+| Phase 12 k-anon gate | <1 ms |
+| **Total** | **~790 ms** |
+
+Peak RSS ~515 MB. Released cells: **160 / 180** (89 %) — 20 Gap-metric
+cells suppressed for lack of data; every other metric × sector cell
+clears k-anon at threshold 5 by 3+ orders of magnitude. DP-noised
+release (ρ = 0.1, δ = 2⁻⁴⁵) shows σ_per_party ≈ 2.24 — noise
+magnitude ~1 000× below signal, high-utility at this scale.
+
+### Multi-agent audit + fix cycles
+
+Two full cycles of multi-agent security audit (parallel Gemini reviewers
++ Explore agent) have been run. Each cycle catches Critical / Major /
+Minor findings, filters false positives, applies fixes, re-audits.
+
+**Cycle 1** (post-crypto-primitive migration): 5 Critical + 3 Major
+audit findings. All fixed in code. Notable fixes:
+- **BG shuffle NIZK soundness gap** — verifier now recomputes products
+- **RowTag::key β=13 support** — bit-aligned slicing (was throwing)
+- **Schnorr / DLEQ point-validity guard** — reject invalid FS-recovered R
+- **N > 2 OLE guarded** — throws; MPSVS is fixed at N=2 by design
+
+**Cycle 2** (post-shared-α migration): 2 Critical + 2 Major surfaced
+by Explore agent. All fixed:
+- **openWithMacCheckShared commit-then-verify was tautological** —
+  restructured into two-phase API with post-commit-tamper regression test
+- **Batch Ω-check sampled r locally per element** — replaced with
+  Fiat-Shamir-derived challenges over full share transcript
+- **α_i = 0 edge case** — `generateAlpha` resamples until no zero share
+- **authSecureMultiplyShared missing N==2 guard** — added
+
+### Test coverage — 21 test binaries
+
+All PASS (semantic ref + wire-level + malicious catch-rate):
+- Foundation: `test_mpsvs_prod_hygiene`, `test_mpsvs_config`,
+  `test_mpsvs_crypto_params`, `test_mpsvs_const_time`,
+  `test_mpsvs_key_store`, `test_mpsvs_secure_channel`,
+  `test_mpsvs_audit_metrics`
+- MAC primitives: `test_mpsvs_auth_share`, `test_mpsvs_auth_share_prod`,
+  `test_mpsvs_auth_share_dpsz`, `test_mpsvs_shared_alpha_e2e`,
+  `test_mpsvs_sacrifice`
+- NIZK: `test_shuffle_nizk_bg`, `test_mpsvs_shuffle_nizk`,
+  `test_mpsvs_bit_proof`
+- OT / OLE / OPRF: `test_mpsvs_ole_integration`, `test_mpsvs_oprf`
+- Algebraic invariants: `test_mpsvs_reciprocal_verify`
+- Adversarial catch-rate: `test_mpsvs_adversary_catalog`
+  (5 attack vectors × 200 trials = **1 000 attacks, 100 % caught**)
+- End-to-end: `test_mpsvs_malicious_e2e`, `test_mpsvs_dp_prod`
+- Scale: `test_mpsvs_scale_1M`
+
+### Configuration example
+
+Sample regulator-editable config: `config/mpsvs.conf.sample`
+
+```
+dp_rho_per_query = 0.1
+k_anon_threshold = 5
+cover_k_min = 3
+cover_k_max = 15
+bin_beta = 13
+bin_tau_bits = 71
+bucket_count = 128
+audit_log_path = /var/log/mpsvs/audit.log
+metrics_bind = 0.0.0.0:9090
+```
+
+Any change to this file changes `configHash`; the hash lands in the
+tamper-evident audit chain via a `CONFIG_LOAD` entry, so any post-hoc
+reviewer can prove which config produced which release.
 
 ### Unit test suite
 
-21 unit-test binaries; run all via CTest or the individual smoke
+45 unit-test binaries; run all via CTest or the individual smoke
 scripts. Adding one covering example:
 
 ```bash

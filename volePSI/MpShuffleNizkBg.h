@@ -1,28 +1,31 @@
 #pragma once
 
-// R27b: Bayer-Groth multiplicative shuffle NIZK.
+// R27b-SOUND: shuffle argument with verifier-recomputed products.
 //
-// Closes the positional-permutation soundness gap from R27 prototype.
-// The construction proves multiset equality {m_i} == {m'_i} (which is
-// equivalent to "C' is a permutation of C" given each commit is binding)
-// via the polynomial identity:
+// After the earlier R27b review flagged that the verifier only compared
+// prover-supplied `productOrig == productShuf` (trivially forgeable), this
+// revision closes the soundness gap by having the prover reveal (m_i, r_i,
+// m'_i, r'_i) alongside the commitments. The verifier then:
 //
-//     Pi_i (x - (m_i + y)) == Pi_i (x - (m'_i + y))
+//   1. Recomputes each Pedersen opening c_i = g^{m_i} · h^{r_i} and
+//      c'_i = g^{m'_i} · h^{r'_i}, and checks they match the transcript.
+//      This BINDS the prover to specific plaintext messages.
 //
-// for two random Fiat-Shamir challenges x, y. Schwartz-Zippel guarantees
-// this holds iff the two multisets match.
+//   2. Independently computes  P    = Π (x - (m_i  + y))  and
+//                                P'   = Π (x - (m'_i + y))
+//      under fresh Fiat-Shamir challenges (y, x). Rejects if P ≠ P'.
 //
-// Bayer-Groth EUROCRYPT 2012 §5 wraps this into a ZERO-KNOWLEDGE
-// argument by committing to the partial-product chain via Pedersen
-// vector commitments and proving each multiplication step via a sigma
-// protocol. The full recursive (O(log n)) variant is R27c.
+// Under Schwartz-Zippel over a ~2^252-element field the polynomial identity
+// holds iff the multisets {m_i} = {m'_i}, and the openings bind the m_i to
+// the commitments — so any tampering (drop/insert/substitute) is caught.
 //
-// THIS R27b DELIVERABLE: implements the SOUND argument structure but
-// reveals the partial product values directly (rather than via the
-// recursive Pedersen-vector commitment). This is sound (verifier
-// catches any false multiset claim) but NOT zero-knowledge over the
-// partial products. The full ZK variant requires the recursive
-// argument; documented in docs/SHUFFLE_NIZK_DESIGN.md.
+// TRADEOFF: this is a SOUND shuffle argument but not a ZERO-KNOWLEDGE one
+// over the messages — the prover reveals the m_i as part of the proof.
+// This matches MPSVS Phase 4 F_PSA semantics where the shuffled bin
+// contents are already public post-alignment. If a hiding-shuffle NIZK is
+// needed for a different use case, upgrade to the full Bayer-Groth
+// EUROCRYPT 2012 §5 recursive partial-product argument (a considerably
+// larger construction; documented in docs/SHUFFLE_NIZK_DESIGN.md).
 
 #include "MpRistretto.h"
 #include "MpPedersen.h"
@@ -33,17 +36,15 @@
 namespace volePSI {
 namespace mpstar {
 
-// R27b proof artifact. The new pieces beyond R27:
-//   - challengeY: shift challenge
-//   - shifted product on each side (revealed)
-//   - per-side opening of the homomorphically-shifted sum-of-products
+// SOUND proof artifact. The verifier recomputes both products from the
+// revealed messages after checking each opening binds to its commitment.
 struct ShuffleProofBg {
-    R255Scalar challengeY;        // Fiat-Shamir challenge 1
-    R255Scalar challengeX;        // Fiat-Shamir challenge 2
-    R255Scalar productOrig;       // Π (x - (m_i + y)) - revealed for soundness
-    R255Scalar productShuf;       // Π (x - (m'_i + y)) - revealed
-    R255Scalar sumOpeningOrig;    // Σ r_i (for sum-of-shifted-messages check)
-    R255Scalar sumOpeningShuf;    // Σ r'_i
+    R255Scalar challengeY;                    // Fiat-Shamir challenge 1
+    R255Scalar challengeX;                    // Fiat-Shamir challenge 2
+    std::vector<R255Scalar> messages;         // revealed m_i (original order)
+    std::vector<R255Scalar> shuffledMessages; // revealed m'_i (shuffled order)
+    std::vector<R255Scalar> openingsOrig;     // r_i so verifier can check c_i
+    std::vector<R255Scalar> openingsShuf;     // r'_i so verifier can check c'_i
 };
 
 ShuffleProofBg shuffleProveBg(

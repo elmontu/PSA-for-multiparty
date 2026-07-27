@@ -156,12 +156,17 @@ macoro::task<std::vector<BeaverTripleBit>> oleGenerateTriplesNParty(
         co_return triples;
     }
 
-    // N > 2: run pairwise OLEs to demonstrate the wire protocol, but
-    // return triples with N slots (only 2 populated per call — the rest
-    // are held by parties that aren't in this pair). This is
-    // scaffolding only; test asserts the STRUCTURE, not full N-party
-    // triple validity. See docs/MPC_WIRE_DESIGN.md for the native
-    // N-party path.
+    // N > 2 is NOT supported in production. Prior scaffolding code XORed
+    // pairwise triple shares without accounting for cross-terms in
+    //   (⨁ Uᵢ) · (⨁ Vⱼ) = ⨁ Uᵢ · Vⱼ  (i ≠ j terms missing)
+    // which produces invalid Beaver triples. MPSVS is fixed at N=2 (S1, S2)
+    // by design (see Rev 7 §2 topology). Any caller reaching this branch
+    // has misconfigured the deployment.
+    throw std::runtime_error(
+        "oleGenerateTriplesNParty: N > 2 not supported — MPSVS Rev 7 fixes "
+        "the compute topology at N=2 (S1, S2). A native N-party OLE requires "
+        "a different silent-OT extension and is out of scope for this build.");
+#if 0   // Retained for future N-native OLE work — DO NOT enable.
     std::vector<BeaverTripleBit> combined(count);
     for (size_t i = 0; i < count; ++i) {
         combined[i].u = SharedBit(N);
@@ -190,6 +195,7 @@ macoro::task<std::vector<BeaverTripleBit>> oleGenerateTriplesNParty(
         }
     }
     co_return combined;
+#endif   // Retained N>2 scaffold above under #if 0 — DO NOT enable.
 }
 
 bool verifyBeaverTripleBatch(const std::vector<BeaverTripleBit>& triples)

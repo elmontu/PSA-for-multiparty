@@ -1,4 +1,5 @@
 #include "MpsvsTopology.h"
+#include "MpsvsProdHygiene.h"    // for ensureSodiumInit before libsodium calls
 
 #include <sodium.h>
 
@@ -14,6 +15,7 @@ namespace mpsvs {
 // ---------------------------------------------------------------------------
 
 SessionId SessionId::random() {
+    ensureSodiumInit();
     SessionId s;
     randombytes_buf(s.bytes.data(), s.bytes.size());
     return s;

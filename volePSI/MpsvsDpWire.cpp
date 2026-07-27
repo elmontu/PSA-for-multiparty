@@ -1,9 +1,11 @@
 #include "MpsvsDpWire.h"
 #include "MpsvsDp.h"
+#include "MpsvsProdHygiene.h"    // for ensureSodiumInit before crypto_hash_sha256
 
 #include <sodium.h>
 
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 
@@ -16,6 +18,7 @@ using mpstar::shareU64;
 // SHA-256(party_id || salt || eta bytes)
 static oc::block computeCommit(uint32_t party_id, const oc::block& salt,
                                 const std::vector<int64_t>& eta) {
+    ensureSodiumInit();
     std::vector<uint8_t> buf;
     buf.reserve(4 + 16 + 8 * eta.size());
     buf.push_back(static_cast<uint8_t>(party_id & 0xff));
@@ -36,8 +39,24 @@ static oc::block computeCommit(uint32_t party_id, const oc::block& salt,
     return out;
 }
 
+// PRODUCTION-MODE GUARD: this MpsvsDpWire path uses std::mt19937_64 for both
+// noise sampling and salt — that is a TEST-ONLY / semantic-reference construct.
+// Production code MUST use MpsvsDpProd::addJointNoiseImpl which pulls from
+// libsodium's CSPRNG. This guard forces the guarantee at runtime by checking
+// an environment variable set by the deployment layer.
+static void assertNotProduction(const char* which) {
+    static const char* env = std::getenv("MPSVS_PRODUCTION_MODE");
+    if (env && env[0] && !(env[0] == '0' && env[1] == 0)) {
+        throw std::runtime_error(
+            std::string("MpsvsDpWire::") + which + ": semantic-reference "
+            "path invoked with MPSVS_PRODUCTION_MODE=1. Use MpsvsDpProd's "
+            "addJointNoiseImpl in production (CSPRNG-backed).");
+    }
+}
+
 NoiseCommit sampleAndCommit(uint32_t party_id, uint32_t num_bins,
                              double sigma_per_party, std::mt19937_64& rng) {
+    assertNotProduction("sampleAndCommit");
     NoiseCommit c;
     c.party_id = party_id;
     c.eta.reserve(num_bins);

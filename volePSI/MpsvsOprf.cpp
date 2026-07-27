@@ -161,6 +161,11 @@ bool schnorrVerify(const GroupElement& Y,
     GroupElement R;
     if (crypto_core_ristretto255_sub(R.data(), gs.data(), cY.data()) != 0)
         return false;
+    // Defence-in-depth: reject if the recovered group element is invalid
+    // before feeding it into the Fiat-Shamir transcript. libsodium's sub
+    // yields valid outputs on valid inputs, but an isValidPoint gate here
+    // eliminates any downstream reliance on that guarantee.
+    if (!isValidPoint(R)) return false;
 
     // Recompute c' from R
     std::vector<uint8_t> tr;
@@ -217,11 +222,13 @@ bool dleqVerify(const GroupElement& Y,
     GroupElement cY; scalarMult(cY, pi.c, Y);
     GroupElement A;
     if (crypto_core_ristretto255_sub(A.data(), gs.data(), cY.data()) != 0) return false;
+    if (!isValidPoint(A)) return false;   // defence-in-depth (see schnorrVerify)
 
     GroupElement Us; scalarMult(Us, pi.s, U);
     GroupElement cV; scalarMult(cV, pi.c, V);
     GroupElement B;
     if (crypto_core_ristretto255_sub(B.data(), Us.data(), cV.data()) != 0) return false;
+    if (!isValidPoint(B)) return false;
 
     // Recompute c'
     std::vector<uint8_t> tr;
@@ -276,7 +283,14 @@ DkgHop2Final dkgS2Finalize(const Context& ctx,
                            const DkgS2Prep& prep,
                            const DkgHop1& hop1,
                            DkgS2State& out_state) {
-    // Verify pi1 from S1
+    // Error-handling convention (see also dkgS1Finalize which returns bool):
+    //   dkgS2Finalize throws because it must produce a DkgHop2Final on
+    //     success — there is no "empty" hop2 to return meaningfully.
+    //   dkgS1Finalize returns bool because it performs three sequential
+    //     verifications on S2's message and the caller wants to distinguish
+    //     which failed via subsequent inspection.
+    // Callers (TopologySession::runDkg) uniformly wrap in try/catch or
+    // convert bool → throw, so the split does not leak into user code.
     if (!schnorrVerify(hop1.Y1, hop1.pi1, ctx))
         throw std::runtime_error("dkgS2Finalize: pi1 verify failed");
 
@@ -428,23 +442,33 @@ uint64_t RowTag::bin(int beta_bits) const {
 }
 
 std::vector<uint8_t> RowTag::key(int beta_bits, int tau_bits) const {
-    // key = bits [beta_bits, beta_bits + tau_bits) of t.
-    // For simplicity: extract byte-aligned windows; caller aligns beta if
-    // needed. Assume beta_bits multiple of 8 in this prototype.
-    if (beta_bits % 8 != 0)
-        throw std::runtime_error("RowTag::key: beta_bits must be byte-aligned in prototype");
-    int start_byte = beta_bits / 8;
-    int tau_bytes = (tau_bits + 7) / 8;
-    if (start_byte + tau_bytes > (int)t.size())
+    // key = bits [beta_bits, beta_bits + tau_bits) of t (big-endian bit index
+    // from the MSB of byte 0). Supports arbitrary bit alignment — no byte-
+    // alignment precondition on beta_bits.
+    if (beta_bits < 0 || tau_bits <= 0)
+        throw std::runtime_error("RowTag::key: negative or zero size");
+    const int total_bits = static_cast<int>(t.size()) * 8;
+    if (beta_bits + tau_bits > total_bits)
         throw std::runtime_error("RowTag::key: not enough tag bits");
-    std::vector<uint8_t> k(t.begin() + start_byte, t.begin() + start_byte + tau_bytes);
-    // Mask off high bits in last byte if tau isn't byte-aligned
-    if (tau_bits % 8 != 0) {
-        int last_bits = tau_bits % 8;
-        uint8_t mask = static_cast<uint8_t>((1 << last_bits) - 1) << (8 - last_bits);
-        k.back() &= mask;
+
+    // Extract tau_bits starting at bit-position beta_bits into a bit-packed
+    // MSB-first output. Output length = ceil(tau_bits / 8) bytes.
+    const int out_bytes = (tau_bits + 7) / 8;
+    std::vector<uint8_t> out(out_bytes, 0);
+
+    for (int i = 0; i < tau_bits; ++i) {
+        // Source bit position in t (MSB-first within each byte).
+        int src_bit  = beta_bits + i;
+        int src_byte = src_bit / 8;
+        int src_off  = 7 - (src_bit % 8);   // 7 = MSB, 0 = LSB
+        uint8_t v = (t[src_byte] >> src_off) & 1;
+        // Destination bit position in out (MSB-first, so bit i of the output
+        // stream lives in byte (i/8), position (7 - i%8)).
+        int dst_byte = i / 8;
+        int dst_off  = 7 - (i % 8);
+        out[dst_byte] |= static_cast<uint8_t>(v << dst_off);
     }
-    return k;
+    return out;
 }
 
 } // namespace mpsvs
