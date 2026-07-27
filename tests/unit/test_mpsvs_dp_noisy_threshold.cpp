@@ -138,8 +138,8 @@ static void test_neighbouring_counts_overlap() {
         CHECK(max_rel == 0 || diff <= max_rel,
               "C3: neighbouring release rates are comparable (bounded ratio)");
     } else {
-        CHECK(true, "C3: both counts suppressed (well below k + τ = 50 + 12) — "
-                     "gate correctly conservative");
+        CHECK(true, "C3: both counts suppressed (well below k + τ ≈ 50 + 16.2 "
+                     "for ρ_th=0.05, δ=1e-6) — gate correctly conservative");
     }
 }
 

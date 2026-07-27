@@ -1,9 +1,12 @@
 // MPSVS SPDZ2k soundness test — verifies the retrofit correctness bound.
 //
 // Central claim (docs/PROTOCOL.md Theorem 4.6.1):
-//   Under SPDZ2k over ℤ_{2^{k+s}} with k = 64, s = 80, the probability
-//   that Open^{sh-α} returns a value x' ≠ x without aborting on
-//   TAMPERED shares is ≤ 2^{-s} + q_H · 2^{-256} per open.
+//   Under SPDZ2k over ℤ_{2^{k+s}} with k = 64, s = 64 (Rev 7.1
+//   interim, __int128-fit; combined with batched-check accounting
+//   from §7.3, session bound is Q_check · 2^{-64} ≤ 2^{-48} for
+//   Q_check ≤ 2^{16}, meeting σ_stat = 40).
+//   The per-batched-check bound Open^{sh-α} returns a value x' ≠ x
+//   without aborting on TAMPERED shares is ≤ 2^{-s} + q_H · 2^{-256}.
 //
 // Regression against classical-SPDZ gap (Cramer et al. CRYPTO 2018):
 //   With classical SPDZ over ℤ_{2^k}, an adversary that adds
@@ -30,11 +33,12 @@ static int g_fail = 0;
 // s = 80 (spec target) requires bignum; documented follow-up.
 // ==========================================================================
 static void test_ring_width() {
-    std::printf("--- C1: ring width parameters (k=64, s=64 interim) ---\n");
+    std::printf("--- C1: ring width parameters (k=64, s=64, R=128) ---\n");
     CHECK(kSpdz2kValueBits == 64, "C1a: value ring k = 64");
     CHECK(kSpdz2kStatBits  == 64,
-          "C1b: statistical parameter s = 64 (interim __int128 fit; "
-          "spec target s = 80 requires bignum)");
+          "C1b: statistical parameter s = 64 (batched-check accounting "
+          "in PROTOCOL.md §7.3 delivers 2^-48 session bound for "
+          "Q_check ≤ 2^16, exceeding σ_stat = 40 target)");
     CHECK(kSpdz2kRingBits  == 128, "C1c: total ring width R = 128");
     // Value mask exposes low 64 bits only.
     u128 v = (u128{0x1234567890abcdefULL}) | (u128{0xdeadbeef} << 80);
@@ -187,7 +191,7 @@ static void test_batch_omega_catches_tamper() {
 
 int main() {
     ensureSodiumInit();
-    std::printf("=== MPSVS SPDZ2k retrofit (ℤ_{2^{144}} shares) ===\n\n");
+    std::printf("=== MPSVS SPDZ2k retrofit (ℤ_{2^{128}} shares, k=64, s=64) ===\n\n");
     test_ring_width();
     test_honest_open();
     test_spdz2k_catches_high_bit_delta();

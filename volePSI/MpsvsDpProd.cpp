@@ -242,6 +242,24 @@ SharedSectorHistogram addCoverFirmsProd(const SharedSectorHistogram& cell,
 //       budget.
 // ---------------------------------------------------------------------------
 
+// Add noise IN SHARES: party i samples its own noise share η_i and adds
+// it to its share of the aggregate.  The reveal step then opens only
+// the noised value y + η, never raw y.  This closes the leak that the
+// earlier version exposed (opening y first, adding noise second → both
+// compute nodes learn the exact aggregate).
+static SharedU64 addNoiseInShares(const SharedU64& x, double sigma) {
+    if (x.N() != 2)
+        throw std::runtime_error("addNoiseInShares: 2-party only");
+    // Each party samples its OWN Gaussian half; sum ~ N(0, σ²).
+    const double sigma_per_party = sigma / std::sqrt(2.0);
+    const int64_t eta_1 = sampleGaussianCsprng(sigma_per_party);
+    const int64_t eta_2 = sampleGaussianCsprng(sigma_per_party);
+    SharedU64 out = x;
+    out.shares[0] += static_cast<uint64_t>(eta_1);
+    out.shares[1] += static_cast<uint64_t>(eta_2);
+    return out;
+}
+
 NoisyThresholdRelease noisyThresholdReleaseProd(
     const SharedSectorHistogram& cell,
     const DpMetricParams& p,
@@ -250,50 +268,50 @@ NoisyThresholdRelease noisyThresholdReleaseProd(
 
     NoisyThresholdRelease out{};
 
-    // --- Stability-noise gate on the count.
-    //   ξ ~ N(0, σ_ξ²) with σ_ξ = Δ_count / √(2·ρ_th), Δ_count = 1.
+    // ─── Stability-noise gate on the count — noise-in-shares. ─────────
+    // σ_ξ = Δ_count / √(2·ρ_th).  Under add/remove neighbours,
+    // Δ_count = 1 (see PROTOCOL.md §3 F_DP definition of ~).
     const double sigma_xi = 1.0 / std::sqrt(2.0 * p.rho_threshold);
-    // Gaussian tail bound: τ = σ_ξ · √(2·ln(1/(2δ))).
     const double tau = sigma_xi * std::sqrt(
         2.0 * std::log(1.0 / (2.0 * p.delta_target)));
-
-    // Reconstruct the true count (semantic ref: MPC would open with
-    // shared-α MAC check).
-    const uint64_t n_valid_true = cell.n_valid.reconstruct();
-    const int64_t xi = sampleGaussianCsprng(sigma_xi);
-    const double  n_tilde_d = static_cast<double>(n_valid_true) + xi;
-
-    // Store ñ (rounded to nearest u64, clamped ≥ 0).
-    out.noised_count = (n_tilde_d < 0.0) ? 0 :
-                        static_cast<uint64_t>(std::llround(n_tilde_d));
     out.stability_margin_tau = tau;
 
-    // Threshold: require ñ ≥ k + τ.  Suppress otherwise.
+    // Add ξ IN SHARES to n_valid, then open — servers see ñ only.
+    SharedU64 n_valid_noised = addNoiseInShares(cell.n_valid, sigma_xi);
+    const int64_t n_tilde_i = static_cast<int64_t>(n_valid_noised.reconstruct());
+    const double  n_tilde_d = static_cast<double>(n_tilde_i);
+    out.noised_count = (n_tilde_i < 0) ? 0 : static_cast<uint64_t>(n_tilde_i);
+
+    // Threshold: require ñ ≥ k + τ.  Post-processing of ñ costs nothing.
     if (n_tilde_d < static_cast<double>(p.k_threshold) + tau) {
-        out.released   = false;
-        out.rho_spent  = p.rho_threshold;   // budget still charged for the gate
+        out.released  = false;
+        out.rho_spent = p.rho_threshold;
+        (void)audit_log; (void)ctx;
         return out;
     }
 
-    // --- Per-metric Gaussian noise on hist, num, den.
+    // ─── Per-metric Gaussian noise on hist, num, den — noise-in-shares.
+    // Under add/remove neighbours a firm affects exactly one bucket by
+    // ±1, so Δ_hist = 1 (not √2 as under replacement).  DpMetricParams
+    // carries whichever the caller chose — we use it as supplied.
     const double sigma_hist = p.delta_hist / std::sqrt(2.0 * p.rho_hist);
     const double sigma_num  = p.delta_num  / std::sqrt(2.0 * p.rho_num);
     const double sigma_den  = p.delta_den  / std::sqrt(2.0 * p.rho_den);
 
-    // Reconstruct sums (semantic ref).
-    const uint64_t sum_num_true = cell.sum_num.reconstruct();
-    const uint64_t sum_den_true = cell.sum_den.reconstruct();
+    SharedU64 num_noised = addNoiseInShares(cell.sum_num, sigma_num);
+    SharedU64 den_noised = addNoiseInShares(cell.sum_den, sigma_den);
+    // Servers open only the noised sums.
+    out.noised_num = static_cast<int64_t>(num_noised.reconstruct());
+    out.noised_den = static_cast<int64_t>(den_noised.reconstruct());
 
-    // Add noise (per-metric σ).
-    out.noised_num = static_cast<int64_t>(sum_num_true) + sampleGaussianCsprng(sigma_num);
-    out.noised_den = static_cast<int64_t>(sum_den_true) + sampleGaussianCsprng(sigma_den);
-
-    // 3-bin histogram release: (noised sum_num, noised sum_den, noised count ñ).
+    // 3-bin histogram release: independent per-bin noise.  We emit
+    // noised sums as the two histogram bins; ñ as the third.  A future
+    // extension can emit a full bucket histogram if the caller carries one.
     out.noised_hist.push_back(out.noised_num
-        + sampleGaussianCsprng(sigma_hist));   // hist bin 0 contribution
+        + sampleGaussianCsprng(sigma_hist));
     out.noised_hist.push_back(out.noised_den
-        + sampleGaussianCsprng(sigma_hist));   // hist bin 1
-    out.noised_hist.push_back(static_cast<int64_t>(out.noised_count));   // hist bin 2 = ñ
+        + sampleGaussianCsprng(sigma_hist));
+    out.noised_hist.push_back(static_cast<int64_t>(out.noised_count));
 
     // R26 clamp on non-negative aggregates.
     if (out.noised_num < 0) out.noised_num = 0;

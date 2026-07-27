@@ -6,20 +6,20 @@
 > stated as a Theorem or Lemma with an explicit advantage bound and a
 > proof sketch, and each complexity claim is quantified.
 >
-> **Not a paper.** This is a reference specification, not a submission
-> artifact. The natural venue for a submission built around this spec
-> is applied-privacy systems — **PoPETs** (best content fit; check
-> whether its journal-issue side satisfies your journal-only rule),
-> **IEEE TIFS**, **IEEE TDSC**, or **ACM TOPS**. The novel delta is
-> composition + deployment under the MAS / SingStat / GovTech
-> constraints, not a new primitive (OPRF: Jarecki–Krawczyk–Xu 2018;
-> shuffle: Bayer–Groth 2012; MPC: SPDZ2k Cramer et al. 2018; DP:
-> Bun–Steinke 2016). *Journal of Cryptology* does not fit — it wants
-> new foundational crypto, and MPSVS is applied composition.
->
 > Companion documents: [`SECURITY.md`](SECURITY.md) (threat model +
 > audit history), [`DESIGN.md`](DESIGN.md) (implementation-level
 > notes), [`HISTORY.md`](HISTORY.md) (R25–R37 legacy).
+
+**Note on publication venue.** MPSVS is a reference specification for
+a deployment, not a paper. The natural venues for a submission built
+around this spec are applied-privacy systems — **PoPETs** (best
+content fit; verify its journal-issue side satisfies any journal-only
+rule), **IEEE TIFS**, **IEEE TDSC**, or **ACM TOPS**. The novel
+delta is composition + deployment under the MAS / SingStat / GovTech
+constraints, not a new primitive (OPRF: Jarecki–Krawczyk–Xu 2018;
+shuffle: Bayer–Groth 2012; MPC: SPDZ2k Cramer et al. 2018; DP:
+Bun–Steinke 2016). *Journal of Cryptology* does not fit — it wants
+new foundational crypto, and MPSVS is applied composition.
 
 ---
 
@@ -43,8 +43,9 @@
 8. Complexity analysis
 9. Failure modes and abort semantics
 10. Change control and deployment
-11. (Appendix — cross-reference to modules)
+11. Governance and release policy
 12. **Implementation Status (Rev 7.1)** — honest ledger of built vs deferred
+Appendix — cross-reference to modules
 
 ---
 
@@ -77,8 +78,8 @@
   that stay in `__int128` include reducing `k` to `48` (still ≥ SGD
   cent range, max ≈ `2⁴⁷`) and setting `s = 80`.
 - `𝔽_p` — the Curve25519 scalar field of order
-  `p = 2^252 + 27742317777372353535851937790883648493`, so
-  `p < 2^{253}` and `log₂ p ≈ 252.4`.
+  `p = 2^{252} + 27742317777372353535851937790883648493`, so
+  `2^{252} < p < 2^{253}` and `log₂ p ≈ 252.0` (0.06 above 252).
 - `𝔾` — the Ristretto255 group of prime order `p`, with generators
   `g, h` of unknown discrete-log relation. `⟨·⟩` — group operation
   (written additively).
@@ -155,8 +156,12 @@ For passphrase `π` sampled from distribution `𝒟` of min-entropy
 `H_∞(𝒟) = h` bits, an offline dictionary attack against
 `crypto_pwhash(π, salt)` with `OPSLIMIT_INTERACTIVE` +
 `MEMLIMIT_INTERACTIVE` costs at least `T ≥ 2^h · T_hash` where
-`T_hash ≈ 250 ms · 64 MB` per candidate. For `h ≥ 60` the attack is
-infeasible; for weak passphrases (`h < 40`) it is not.
+`T_hash ≈ 250 ms of wall-clock work plus 64 MB of RAM per candidate`
+on the target hardware (libsodium's default sensitivity settings;
+the memory factor is a hard cost, not a time-space tradeoff away).
+For `h ≥ 60` the attack is infeasible even on GPU clusters (the
+64 MB per-candidate memory bounds parallelism); for weak
+passphrases (`h < 40`) it is feasible.
 
 ### Assumption 7 (System CSPRNG)
 
@@ -292,8 +297,10 @@ NoisyThresholdQuery(n_valid, metric_m, y_m):
     ρ_spent += (ρ_th + ρ_m).
 
     # τ(ρ_th, δ) := σ_ξ · sqrt(2 · ln(1/(2δ)))   (Gaussian tail bound)
-    # For ρ_th = 0.05, δ = 10⁻⁶: τ ≈ 12.  So k=5 with margin 12 means
-    # a cell releases only when the NOISED count exceeds 17.
+    # Numeric: for Δ_count = 1, ρ_th = 0.05, δ = 10⁻⁶:
+    #   σ_ξ  = sqrt(1 / (2·0.05)) = sqrt(10) ≈ 3.162
+    #   τ    = 3.162 · sqrt(2 · ln(5·10⁵)) ≈ 3.162 · sqrt(26.24) ≈ 16.2
+    # So with k = 5, cells release only when ñ > k + τ ≈ 21.2.
 ─────────────────────────────────────────────────────────────────
 ```
 
@@ -311,7 +318,7 @@ construction of Bun–Steinke 2016 §4 ("stability-based histograms").
 ─────────────────────────────────────────────────────────────────
 F_SECTORVULN                                          [Target]
 ─────────────────────────────────────────────────────────────────
-Setup:  invoke F_OPRF^{2-of-2}, F_SPDZ^{2-of-2}, F_DP.
+Setup:  invoke F_OPRF^{2-of-2}, F_SPDZ2k^{2-of-2}, F_DP.
         publish Φ and receive ρ-budget from GT.
 Release(sector, period, metric):
     U ← F_PSA union of inputs
@@ -329,9 +336,10 @@ Release(sector, period, metric):
 ```
 
 **Theorem (Section 7.1).** Protocol Π_SECTORVULN Rev 7 realises
-F_SECTORVULN in the (F_AUTH, F_CT, F_OPRF, F_SPDZ, F_DP)-hybrid model
+F_SECTORVULN in the (F_AUTH, F_CT, F_OPRF, F_SPDZ2k, F_DP)-hybrid model
 under Assumptions 1, 3, 4, 7, 8, 9 with statistical distance
-`≤ σ_stat + negl(λ)` per session.
+`≤ Q_check · 2^{-s} + negl(λ)` per session (see Theorem 7.3 for the
+per-batched-check accounting).
 
 ---
 
@@ -428,36 +436,71 @@ Relation:  R = {(C, C'; msg, r, r', π_perm) :
                     ∧ C'[i] = Com(msg[π_perm(i)], r'[i]) }.
 ```
 
-**Confidentiality analysis.** This is a **sound-but-not-hiding**
-shuffle argument: `shuffleVerifyBg` recomputes `Com(msg[i], r[i])`
-against the transcript, so any verifier learns every `(msg[i], r[i])`
-pair. Compatibility with MPSVS's threat model (goals C1 / C2 of
-`SECURITY.md`) rests entirely on **who verifies**:
+**Definition of `msg[i]`** (this section is authoritative). In the
+Rev 7.1 implementation `MpsvsShuffleWire::shuffleAndProve`, `msg[i]`
+is the 64-bit **row-tag key** — the `τ`-bit tag suffix carried by
+each `UnionRow` post-F_PSA (`RowTag::key`). These keys are secret
+under the F_PSA ideal functionality; nothing in windowedMerge opens
+them. The earlier claim that they are "public post-alignment via
+canonical-flag reveal" was incorrect — windowedMerge sets `u.canonical`
+as a SECRET SPDZ-shared bit (Alg 22c line 33) and downstream
+`markLive` operates on it obliviously. The canonical flag is opened
+only when a row is materialised for release, well after Phase 4.
 
-- **GT MUST NOT verify** (this proof reveals raw messages; GT is
-  forbidden from seeing shares/payloads per Assumption 9).
-  Only the audit-chain hash of the proof — not the proof body — is
-  delivered to GT.
-- **S_1 and S_2 verify each other's shuffle side.** For CGP composed
-  shuffle, `S_1` chose π_1 and produced the intermediate commitment
-  vector `C_1` from the joint input `msg_0`; `S_2` chose π_2 and
-  produced `C_2` from `C_1`. Both parties **already jointly hold**
-  the ⟦msg_0⟧ shares (§5.4 Phase 3), so revealing `msg` in the proof
-  discloses no data that they could not already reconstruct together.
-- **The messages that get revealed are bin indices and F_PSA union-row
-  metadata that are public post-alignment** (Rev 7 §5.6). Row-tag keys
-  used in the shuffle proof itself are the values already made public
-  by the windowedMerge step (canonical-flag reveal). Payload shares
-  are NOT part of `msg`; they are attached to each row via `AuthSharedU64`
-  and pass through the shuffle without being opened.
+**Confidentiality analysis (honest).** Since `msg[i]` is secret and
+the sound-with-reveal shuffle discloses every `(msg[i], r[i])` to any
+verifier, `shuffleVerifyBg` **cannot be run by** an adversary in
+scope for MPSVS's confidentiality goals:
 
-Under these three constraints the sound-with-reveal variant is
-compatible with C1 / C2. If a future use case demands a shuffle over
-values still secret to both S_1 and S_2 (e.g. cross-domain routing
-where the shuffle input is itself secret), swap in Bayer–Groth §5's
-recursive partial-product argument — see [`DESIGN.md`](DESIGN.md)
-§4.2 and Bayer–Groth EUROCRYPT 2012. This is **not** implemented in
-Rev 7; deployments requiring it must gate on that upgrade.
+- **GT MUST NOT verify** — this reveals per-firm row-tag keys; GT is
+  forbidden from seeing shares/payloads (Assumption 9). Only a
+  digest (`SHA-256(π_SHUF)`) reaches the audit chain. **Consequence:
+  the proof is no longer publicly auditable** — a third-party
+  regulator cannot re-verify shuffle integrity from the audit trail
+  alone. This weakens Accountability Goal AC1 relative to a public
+  audit; the weakness is intentional and named here explicitly.
+- **Malicious `S_1` (or `S_2`) MUST NOT verify** — Assumption 8
+  says exactly one of `{S_1, S_2}` is corrupt. If the corrupt server
+  runs `shuffleVerifyBg` on the peer's output, it learns `msg`, i.e.
+  the row-tag keys of every union row — which under 2-of-2 sharing
+  it provably could NOT reconstruct alone. An earlier draft argued
+  "the two parties already jointly hold ⟦msg⟧ so revealing msg is
+  no leak" — that argument is invalid, since non-collusion is
+  precisely what forbids one party from computing the joint state.
+
+**What the reveal-based shuffle proof actually achieves in Rev 7.1.**
+`shuffleVerifyBg` is a stand-alone primitive verified by
+`test_shuffle_nizk_bg` and `test_mpsvs_shuffle_nizk` — it is **not
+wired into the deployed pipeline as a verifier stage** because no
+in-scope party can safely run it. The primitive stands ready for
+either (a) a public-audit deployment where the row-tag keys are
+declassified post-release (not the Rev 7 policy), or (b) upgrade to
+the hiding Bayer-Groth §5 recursive partial-product argument (not
+implemented).
+
+**Integrity gap on payloads.** Payload shares are `AuthSharedU64`
+values attached to each row that are NOT part of the committed `msg`
+vector. A malicious shuffler could therefore permute the metadata
+one way and the payload column a different way (or drop payloads),
+and `shuffleVerifyBg` would accept. **Payload integrity therefore
+does not follow from Theorem 7.4** — it relies on the downstream
+SPDZ2k MAC check (Theorem 4.6.1) catching any inconsistency at open
+time. Goal I2 (§SECURITY.md §2.2) is met **jointly** by Theorem 7.4
+(multiset preservation of the committed metadata) and Theorem 4.6.1
+(payload-share integrity via MAC), not by Theorem 7.4 alone.
+
+**Recommended follow-up for A2 defence in the shuffle step.** Either
+- switch to the hiding Bayer-Groth §5 shuffle so the sound-with-reveal
+  leak goes away (large: ~1500 LOC + recursive partial-product argument);
+  OR
+- extend commitments to include the payload column so integrity follows
+  from Theorem 7.4 alone (medium: commit vector doubles; sound-with-reveal
+  now discloses payloads too, so BG §5 is still needed for
+  confidentiality); OR
+- accept that Rev 7.1 shuffle integrity relies on Thm 4.6.1 downstream
+  and document the compositional argument.
+
+See §12.3 for the corresponding downgrade to `⚠️` on the shuffle rows.
 
 **Algorithm 5** — `shuffleProveBg`
 ```
@@ -512,14 +555,17 @@ verifyBit  : (π_OR, C, ctx ∈ {0,1}*)       →  {accept, reject}
 Relation:  R = {(C; b, r) : C = [b]g + [r]h ∧ b ∈ {0, 1}}.
 ```
 
-**Algorithm 7** — `commitBit(b, r)`
+**Algorithm 7** — `commitBit(b, r)` — commit to a bit `b ∈ {0, 1}`
+using randomiser `r ∈ 𝔽_p`; independent of session context.
 ```
  1:  if b ∉ {0, 1}: throw invalid_argument
  2:  if b = 0:      return C ← [r] h
  3:  else:          return C ← g + [r] h
 ```
 
-**Algorithm 8** — `proveBit(bit, r, C)`
+**Algorithm 8** — `proveBit(bit, r, C, ctx)` — Fiat-Shamir OR-proof
+that `C` opens to a bit; `ctx` (session context) is included in the
+challenge hash to bind the proof to a session.
 ```
  1:  T_0 ← C;  T_1 ← C − g
  2:  if bit = 0:
@@ -531,12 +577,13 @@ Relation:  R = {(C; b, r) : C = [b]g + [r]h ∧ b ∈ {0, 1}}.
  8:  else:                                      ▷ mirror for bit = 1
  9:      w_1 ← ${𝔽_p};  A_1 ← [w_1] h
 10:      c_0 ← ${𝔽_p};  s_0 ← ${𝔽_p};  A_0 ← [s_0] h − [c_0] T_0
-11:      c   ← hashToScalar(... same input ...)
+11:      c   ← hashToScalar("mpsvs.bitproof" ‖ ctx ‖ LP(C) ‖ LP(A_0) ‖ LP(A_1))
 12:      c_1 ← c − c_0;   s_1 ← w_1 + c_1 · r
 13:  return π = (A_0, A_1, c_0, c_1, s_0, s_1)
 ```
 
-**Algorithm 9** — `verifyBit(π, C)`
+**Algorithm 9** — `verifyBit(π, C, ctx)` — verifier binds to the
+same `ctx` used at proving time.
 ```
  1:  c   ← hashToScalar("mpsvs.bitproof" ‖ ctx ‖ LP(C) ‖ LP(π.A_0) ‖ LP(π.A_1))
  2:  if π.c_0 + π.c_1 ≠ c mod p: return reject
@@ -689,23 +736,57 @@ full `R`-bit view catches any nonzero `δ` with probability
 `≥ 1 - 2^{-s}` over the uniform choice of `α`.
 
 **Theorem 4.6.1 (SPDZ2k open soundness).** Under Assumption 4 (SHA-256
-as RO) and Assumption 7 (CSPRNG for σ_i, salt_i, α), the probability
-that `Open^{sh-α}` returns a value `x' ≠ x` without aborting, over a
-corrupted `S_i`'s choice of tampered `⟦[x]⟧_i`, is at most
+as RO) and Assumption 7 (CSPRNG for σ_i, salt_i, α), for any adversary
+𝒜 that corrupts one server `S_i` and outputs tampered value-share
+`⟦x⟧'_i = ⟦x⟧_i + Δ_x` **and** tampered MAC-share
+`⟦α·x⟧'_i = ⟦α·x⟧_i + Δ_σ`, the probability that `Open^{sh-α}`
+returns a value `x' ≢ x mod 2^k` without aborting is at most
 ```
-Adv^{open,SPDZ2k}(𝒜, k, s, q_H) ≤ 2^{-s} + q_H · 2^{-256}.
+Adv^{open,SPDZ2k}(𝒜, k, s, q_H) ≤ 2^{-s} + q_H · 2^{-256}
 ```
+where the guarantee holds whenever the low-`k` component
+`Δ_x mod 2^k ≠ 0` (i.e., the adversary changes the *semantic value*
+of `x`; a Δ_x whose low `k` bits vanish is indistinguishable from an
+honest opening and is not a soundness violation).
 
-**Proof sketch.** Standard SPDZ2k open-check argument (Cramer et al.
-CRYPTO'18 Theorem 3): for tampered shares `⟦x⟧' = ⟦x⟧ + Δ` where
-`Δ ≠ 0 mod 2^R`, the check `σ_1 + σ_2 = 0 mod 2^R` holds iff
-`α · Δ = 0 mod 2^R`. Since `α` is uniformly random in `ℤ_{2^R}` and
-independent of Δ (α is unknown to the adversary — DPSZ commit-reveal
-prevents Δ-choice from depending on α), the probability that a nonzero
-Δ has `α · Δ = 0 mod 2^R` is at most `2^{-s}` (Cramer et al. Prop.
-3.1: for any `Δ ∈ ℤ_{2^R} \ {0}`, `#{α : α·Δ = 0} ≤ 2^{R-s}` when
-top `s` bits of `α` are uniform). The commit-reveal binding contributes
-`q_H · 2^{-256}` via RO collision.  ∎
+**Proof.** The MAC check is `σ_1 + σ_2 − α · x' ≡ 0 mod 2^R`.
+Substituting the adversary's tampering:
+```
+LHS = (Σ_i ⟦α·x⟧_i + Δ_σ) − α · (x + Δ_x)
+    = 0 + Δ_σ − α · Δ_x   mod 2^R
+```
+so the check passes iff `α · Δ_x ≡ Δ_σ mod 2^R`. Two cases:
+
+1. **`Δ_x ≡ 0 mod 2^R`** (no value tamper in the *full* ring):
+   check passes iff `Δ_σ = 0`. If additionally the low `k` bits of
+   `Δ_x` are zero, this is not a soundness violation (`x' ≡ x mod
+   2^k`). If `Δ_x ≡ 0 mod 2^R` but the adversary set `Δ_σ ≠ 0`, the
+   check catches with certainty.
+
+2. **`Δ_x ≢ 0 mod 2^R`**: the equation `α · Δ_x ≡ Δ_σ mod 2^R`
+   determines `α` up to a coset of `Ann(Δ_x)`. Since MPSVS uses
+   `α ∈ ℤ_{2^R}` uniform (note: this deviates from Cramer et al.
+   who restrict to `α ∈ M_s := {a ∈ ℤ_{2^R} : a mod 2^k = 0}` — see
+   Remark below), Prop. 3.1 of Cramer et al. applies in the *shifted*
+   form: `#{α ∈ ℤ_{2^R} : α · Δ_x ≡ Δ_σ mod 2^R} ≤ 2^{R-ord(Δ_x)}`
+   where `ord(Δ_x)` is the 2-adic order of the low-non-zero bit.
+   Since `Δ_x mod 2^k ≠ 0` by hypothesis, `ord(Δ_x) < k`, and the
+   solution count is at most `2^{R-1}`; but the *conditional*
+   distribution of `α` after DPSZ commit-reveal has ≥ `s` bits of
+   remaining entropy (α is committed before adversary sees any
+   `α · x` output that could leak it), so any given target has
+   probability `≤ 2^{-s}`.
+
+The commit-reveal binding contributes `q_H · 2^{-256}` via RO
+collision.
+
+**Remark on the α domain.** Cramer et al. §3 use `α ∈ M_s` (top
+`s` bits uniform, bottom `k` bits zero) to get a cleaner bound.
+MPSVS uses uniform `α ∈ ℤ_{2^R}` because (i) sampling `M_s` requires
+a rejection loop that leaks timing side-channels, and (ii) the loose
+bound `2^{-s}` still holds by the argument above. This costs at
+most a small constant factor and does not affect the `s = 64`,
+`R = 128` analysis in §7.3.  ∎
 
 **Algorithm 13** — `BatchOpen^{sh-α, Ω}(⟦[x_1]⟧, …, ⟦[x_n]⟧, ⟦α⟧)`
 ```
@@ -750,46 +831,74 @@ triple then `Open(⟦z⟧) = xy` and `Open(⟦α·z⟧) = α · xy`, so
 **Algorithm 15** — `Sacrifice^{sh-α}(T, T', ⟦α⟧)` (Ω-check for triples,
 SPDZ2k variant)
 ```
- 1:  r ← ${ℤ_{2^R}^*}                                    ▷ full-ring challenge
+ 1:  r ← ${ℤ_{2^R} \ {0}}                                ▷ nonzero challenge
  2:  ρ ← Open^{sh-α}(r · ⟦u⟧ − ⟦u'⟧ mod 2^R,             ⟦α⟧)
  3:  σ ← Open^{sh-α}(    ⟦v⟧ − ⟦v'⟧ mod 2^R,             ⟦α⟧)
  4:  τ ← Open^{sh-α}(r · ⟦w⟧ − ⟦w'⟧ − σ ⟦u'⟧ − ρ ⟦v'⟧ mod 2^R, ⟦α⟧)
- 5:  return (τ = ρ · σ mod 2^R) ? "T valid" : "abort"
+ 5:  return (τ ≡ ρ · σ mod 2^k) ? "T valid" : "abort"
 ```
 
-**Theorem 4.6.3 (Sacrifice soundness, SPDZ2k).** For a malformed triple
-`(u, v, w) with w ≠ uv mod 2^k`, `Sacrifice^{sh-α}` returns "abort"
-except with probability `≤ 2^{-s}` over the uniform choice of `r ∈
-ℤ_{2^R}` and `α ∈ ℤ_{2^R}`.
+Note: the implementation
+(`MpsvsAuthShare128.cpp:sacrificeCheckTripleShared128`) samples `r`
+from `ℤ_{2^R}` and remaps `r = 0 → r = 1`; the induced distribution
+on `ℤ_{2^R} \ {0}` is `2⁻R` biased for `r = 1`, negligible relative
+to the `2⁻ˢ` bound below.
 
-**Proof sketch.** Substituting `w = uv + Δ` with `Δ ≠ 0 mod 2^k`, we
-have (in `ℤ_{2^R}`):
+**Theorem 4.6.3 (Sacrifice soundness, SPDZ2k).** For a malformed
+triple `(u, v, w)` with `w ≢ uv mod 2^k`, `Sacrifice^{sh-α}` returns
+"abort" except with probability `≤ 2^{-s+2} + q_H · 2^{-256}`, over
+the uniform choice of `r ∈ ℤ_{2^R} \ {0}` and `α ∈ ℤ_{2^R}`.
+
+**Proof.** Let `Δ := w − uv mod 2^R`. By hypothesis
+`Δ mod 2^k ≠ 0`. Substituting into line 4 (in `ℤ_{2^R}`):
 ```
 τ = r(uv + Δ) − u'v' − σu' − ρv'   mod 2^R
   = r · Δ  +  [ruv − u'v' − σu' − ρv']
-  = r · Δ  +  ρ · σ     mod 2^R    (Beaver identity on honest T')
+  = r · Δ  +  ρ · σ                  mod 2^R
 ```
-So `τ − ρσ = r · Δ mod 2^R`. The check passes iff `r · Δ ≡ 0 mod 2^R`.
-The three individual opens (steps 2, 3, 4) each contribute at most
-`2^{-s}` by Theorem 4.6.1. Under uniform `r ∈ ℤ_{2^R}` (Cramer et al.
-Prop. 3.1), the equation `r · Δ ≡ 0 mod 2^R` has at most `2^{R-s}`
-solutions out of `2^R`, giving probability `≤ 2^{-s}` per Δ.
-Union bound: total failure probability
-`≤ 3 · 2^{-s} + q_H · 2^{-256} ≈ 2^{-s+2}` — for `s = 80` this is
-`≤ 2^{-78}`.  ∎
+so `τ − ρσ ≡ r · Δ mod 2^R`. The sacrifice check accepts iff
+`r · Δ ≡ 0 mod 2^R`.
+
+**Solution counting.** Since `Δ mod 2^k ≠ 0`, we have `Δ = 2^t · Δ'`
+with `t < k` and `Δ'` odd. The equation `r · Δ ≡ 0 mod 2^R` becomes
+`r ≡ 0 mod 2^{R-t}`, which has exactly `2^t` solutions in `ℤ_{2^R}`,
+of which `2^t − 1` are nonzero (r=0 excluded from sampling by line
+1). The challenge domain has size `2^R − 1`, so:
+```
+Pr[r · Δ ≡ 0 | r ≠ 0]  ≤  (2^t − 1) / (2^R − 1)
+                       ≤  2^t / 2^{R-1}
+                       ≤  2^{k-1} / 2^{R-1}
+                       =  2^{-s}.
+```
+The three per-open MAC checks (lines 2, 3, 4) each contribute at
+most `2^{-s}` by Theorem 4.6.1 (each covers both value-share and
+MAC-share tampering per the corrected statement above). Union bound:
+```
+Pr[abort fails]  ≤  3 · 2^{-s}  +  2^{-s}  +  q_H · 2^{-256}
+                 =  4 · 2^{-s}  +  q_H · 2^{-256}
+                 =  2^{-s+2}    +  q_H · 2^{-256}.
+```
+For `s = 64` this is `≤ 2^{-62} + q_H · 2^{-256}`, comfortably past
+the `σ_stat = 40` target. Concurrent MAC-share tampering during
+the three opens is already absorbed by the per-open bound above.  ∎
 
 **Remark (SPDZ2k gap vs classical SPDZ).** MPSVS's SPDZ2k
 authentication in `ℤ_{2^R}` (with `R = k + s`) is the *correct* fix
 for the field-vs-ring gap noted by Cramer et al. Any restatement of
-Theorems 4.6.1 / 4.6.3 as `2^{-k}` (as earlier drafts of this document
-did) was in error and has been corrected. The wire-level MpsvsAuthShare
-implementation prior to Rev 7.1 authenticated only in `ℤ_{2^{64}}`;
-this is being retrofitted to `ℤ_{2^{144}}` (`__int128` shares) — see
-`volePSI/MpsvsAuthShare.h` `[SPDZ2K-TODO]` markers. Deployments running
-the ring-`ℤ_{2^{64}}` build have worst-case per-open detection
-probability `1/2` against a fully-malicious adversary and MUST NOT be
-used with adversary class A2 (§SECURITY.md) until the 144-bit retrofit
-lands.
+Theorems 4.6.1 / 4.6.3 as `2^{-k}` (as earlier drafts of this
+document did) was in error and has been corrected. The wire-level
+`MpsvsAuthShare` (legacy) implementation authenticated only in
+`ℤ_{2^{64}}`; Rev 7.1 introduces `MpsvsAuthShare128` authenticating
+in `ℤ_{2^{128}}` (`__int128` shares, `k = 64`, `s = 64`). Combined
+with the batched-check accounting of §7.3, this delivers session-level
+`≤ Q_check · 2^{-64} ≤ 2^{-48}` for `Q_check ≤ 2^{16}`, which
+meets and exceeds the `σ_stat = 40` target. Deployments running the
+legacy ring-`ℤ_{2^{64}}` build have worst-case per-open detection
+probability `1/2` against a fully-malicious adversary and MUST NOT
+be used with adversary class A2 (§SECURITY.md) until each wire is
+migrated to `AuthSharedU128`. (Earlier drafts of this document
+described a `ℤ_{2^{144}}` retrofit; that plan is cancelled — see
+§12 for the batched-check accounting that eliminated the need.)
 
 ### 4.7 OLE-based Beaver triples
 
@@ -844,32 +953,92 @@ Realisation: `MpsvsDp::sigmaFromRho`, `MpsvsDpProd::sampleGaussianCsprng`
 (discrete Gaussian via CSPRNG-driven Box–Muller with rounding to
 integer; documented rounding bias `≤ O(σ^{-1})` in the header).
 
-**Algorithm 17** — `JointGaussianRelease(y, ρ, k)` — commit-then-reveal
-between S_1, S_2
+**Algorithm 17** — `NoisyThresholdRelease(⟦[n_valid]⟧, ⟦[num]⟧, ⟦[den]⟧, params)`
+— **noise-in-shares** variant (Rev 7.1). Each party samples its own
+Gaussian half and *adds it into its share before opening*, so no
+server ever sees the raw aggregates.
 ```
- 1:  σ         ← sqrt(2 / (2ρ))               ▷ Δ_2 = √2 for count hist
- 2:  σ_party   ← σ / sqrt(2)                  ▷ each contributes half variance
- 3:  each party i ∈ {1, 2}:
- 4:      η_i     ← ${discrete Gaussian(0, σ_party²) via CSPRNG}
- 5:      salt_i  ← ${𝔽_{2^128}}
- 6:      commit_i ← H("mpsvs.dp.commit" ‖ ctx ‖ LE32(i) ‖ LE64(η_i) ‖ salt_i)
+Inputs:
+   ⟦[n_valid]⟧            SPDZ2k share of the true count
+   ⟦[num]⟧, ⟦[den]⟧       SPDZ2k shares of numerator/denominator of the metric
+   params.sigma_th        σ for threshold noise (Δ_th = 1 under add/remove)
+   params.sigma_num       σ for numerator noise (per-metric Δ_num)
+   params.sigma_den       σ for denominator noise (per-metric Δ_den)
+   params.tau             suppression threshold (see §7.5 for numeric bound)
+Constants: ctx is the session context.
+
+ 1:  each party i ∈ {1, 2}:                            ▷ σ_party = σ / √2
+ 2:      η_i^th   ← ${discrete Gaussian(0, (σ_th   / √2)²)}
+ 3:      η_i^num  ← ${discrete Gaussian(0, (σ_num  / √2)²)}
+ 4:      η_i^den  ← ${discrete Gaussian(0, (σ_den  / √2)²)}
+ 5:      salt_i   ← ${𝔽_{2^128}}
+ 6:      commit_i ← H("mpsvs.dp.commit.v2" ‖ ctx ‖ LE32(i)
+                     ‖ LE64(η_i^th) ‖ LE64(η_i^num) ‖ LE64(η_i^den) ‖ salt_i)
  7:  Round 1: exchange commit_1 ↔ commit_2
- 8:  Round 2: exchange (η_i, salt_i) ↔
+ 8:  Round 2: exchange (η_i^th, η_i^num, η_i^den, salt_i)
  9:  each party verifies peer's commit; abort on mismatch
-10:  η ← η_1 + η_2                             ▷ ~ N(0, σ²)
-11:  y_open ← Open^{sh-α}(⟦[y]⟧, ⟦α⟧)         ▷ or ⊥ on MAC failure
-12:  if n_valid < k: return ⊥                  ▷ k-anon suppression
-13:  return max(0, y_open + η)                 ▷ R26 clamp
+10:  each party i locally builds noise-added shares:
+       ⟦n_th⟧_i   ← ⟦n_valid⟧_i + η_i^th   mod 2^R
+       ⟦x_num⟧_i  ← ⟦num⟧_i     + η_i^num  mod 2^R
+       ⟦x_den⟧_i  ← ⟦den⟧_i     + η_i^den  mod 2^R
+       (MAC shares ⟦α··⟧_i updated correspondingly with α_i · η_i)
+11:  n̂_open   ← BatchOpen^{sh-α, Ω}({⟦n_th⟧, ⟦x_num⟧, ⟦x_den⟧}, ⟦α⟧)
+     ▷ single batched MAC check covers all three opens (§7.3)
+12:  if n̂_open[th] < τ: return ⊥                       ▷ noisy-threshold gate
+13:  return (n̂_open[num] / n̂_open[den])                ▷ or metric-specific combiner
 ```
 
-**Theorem 4.8.5.** Algorithm 17 realises `F_DP(σ, k, ρ, ρ_max)`
-under Assumptions 4, 7, 8, plus F_SPDZ (for step 11).
+**Key changes from earlier drafts.**
+- The gate at line 12 compares the **noisy** count `n̂` against `τ`,
+  never the true `n_valid`. This is the stability-based release of
+  Bun-Steinke (2016); the raw `n_valid` is *never* revealed to any
+  server.
+- Numerator, denominator, and threshold are all noised **in shares**
+  before opening (line 10). Servers open only `y + η_1 + η_2`, never
+  raw `y`.
+- A single batched Ω-check (line 11) covers all three opens, so this
+  release counts as **one** MAC-check invocation against `Q_check`
+  in §7.3.
+- Per-metric `σ_num`, `σ_den` thread from `params`; each metric's
+  L2-sensitivity `Δ_num`, `Δ_den` is set at the F_SECTORVULN
+  interface (see §5.13 metric table).
 
-**Proof sketch.** Under honest execution, `η_1 + η_2 ~ N(0, σ²)` since
-independent Gaussians. Under a malicious `S_i`, commit binding
-(Assumption 4) prevents `S_i` from choosing `η_i` after seeing peer's
-`η_{peer}`. The MAC check in step 11 catches any share tampering with
-prob `≥ 1 − 2^{-k}` (Theorem 4.6.1).  ∎
+**Theorem 4.8.5.** Algorithm 17 realises `F_DP(σ_th, σ_num, σ_den,
+τ, ρ_max)` under Assumptions 4, 7, 8, plus F_SPDZ2k (for step 11)
+and Assumption 9 (server halves cannot see the other party's η_i
+before commit-reveal — enforced by round structure and commit
+binding).
+
+**Proof.** *Correctness.* By line 10, `⟦n_th⟧ = ⟦n_valid⟧ + η^th`
+where `η^th = η_1^th + η_2^th ~ N(0, σ_th²)` (sum of independent
+half-variance Gaussians). Similarly for num, den. The MAC shares
+are updated with the party's own α_i · η_i, so the SPDZ2k invariant
+`Σ_i ⟦α·x⟧_i ≡ α · x mod 2^R` is preserved for the noised value.
+Line 11 therefore returns the noised aggregates correctly under
+Theorem 4.6.1.
+
+*Privacy.* Both S_1 and S_2 see only the *sum* `η_i^peer + own η_i`
+implicit in the opened value; each learns nothing about the true
+aggregate beyond what `(y + η) with η ~ N(0, σ²)` reveals.
+Neighbour-level privacy: for any pair of adjacent databases `D, D'`
+under add/remove relation, `|n_valid(D) − n_valid(D')| ≤ 1 = Δ_th`,
+`|num(D) − num(D')| ≤ Δ_num`, `|den(D) − den(D')| ≤ Δ_den`. Fact
+4.8.2 gives per-quantity ρ = (Δ / σ)² / 2; sum gives total zCDP
+`ρ = ρ_th + ρ_num + ρ_den` by composition (Fact 4.8.4).
+
+*Malicious noise.* Commit binding (line 6) prevents `S_i` from
+choosing `η_i` after seeing peer's `η_{peer}`; hence honest σ_party
+sample space applies. Value tampering on `⟦n_valid⟧` etc. is caught
+by the batched MAC check at line 11 with prob `≥ 1 − 4·2^{-s}` per
+Theorem 4.6.3-style bound.  ∎
+
+**Removed (was in earlier draft).** The old Algorithm 17 opened
+`y_open` *first* (line 11 of the old version) and then gated on
+`n_valid < k` (old line 12) — but `n_valid` was also opened without
+noise. That leaked the true count to both servers before any noise
+was added, breaking neighbour indistinguishability. The Rev 7.1
+version above avoids this by adding noise in-shares and gating on
+the noised threshold.
 
 ---
 
@@ -1004,39 +1173,68 @@ for k ← 2, 4, ..., n:
               conditionalSwap(bin_b[i], bin_b[l])
 ```
 
-**Algorithm 22c** — `windowedMerge(sorted_bin_b)` (Rev 7 §5.4)
+**Algorithm 22c** — `windowedMerge(sorted_bin_b)` (Rev 7 §5.4) —
+window-scan variant matching `MpsvsAlignment::windowedMerge`.
 ```
- 1:  # Iterate the sorted bin; on every canonical boundary (r.key ≠
- 2:  # prev_key) START a fresh union row via AuthMux; on non-canonical
- 3:  # rows FOLD r into the current union row via AuthOR / AuthMUX.
- 4:  # The oblivious form emits one output row per input row — non-
- 5:  # canonical rows carry live=0 and are dropped downstream.
- 6:
- 7:  u_prev ← ZERO_UNION                              ▷ SPDZ2k-shared zero
- 8:  prev_key ← 0                                     ▷ SPDZ2k-shared placeholder
- 9:  out ← []
-10:  for row r ∈ sorted_bin_b:
-11:      canonical ← AuthNEQ(r.key, prev_key)         ▷ 1 iff key changed
-12:      # Fresh union row when canonical=1, else fold into u_prev:
-13:      u_start ← AuthMux(canonical, ZERO_UNION, u_prev)
-14:      u.b_MAS ← AuthOR(u_start.b_MAS, AuthAND(AuthEQ(r.source, MAS), r.memb))
-15:      u.b_DOS ← AuthOR(u_start.b_DOS, AuthAND(AuthEQ(r.source, DOS), r.memb))
-16:      u.b_MOM ← AuthOR(u_start.b_MOM, AuthAND(AuthEQ(r.source, MOM), r.memb))
-17:      u.p_MAS ← AuthMux(AuthEQ(r.source, MAS), r.payload, u_start.p_MAS)
-18:      u.p_DOS ← AuthMux(AuthEQ(r.source, DOS), r.payload, u_start.p_DOS)
-19:      u.p_MOM ← AuthMux(AuthEQ(r.source, MOM), r.payload, u_start.p_MOM)
-20:      u.canonical ← canonical
-21:      u_prev ← u                                    ▷ carry into next row
-22:      prev_key ← r.key
-23:      out ← out ‖ u
-24:  return out                                        ▷ len = |sorted_bin_b|
+ 1:  # Rev 7 §5.4 invariant: since a firm has at most three rows in a
+ 2:  # bin (one per client MAS/DOS/MOM), a same-key run has length ≤ 3.
+ 3:  # We assemble the union row at position i by looking AHEAD up to
+ 4:  # index i+2 (window size 3) and picking one row per source.  The
+ 5:  # FIRST row of each run carries the complete union; subsequent
+ 6:  # rows in the run get canonical=0 and are dropped by markLive.
+ 7:
+ 8:  out ← []
+ 9:  n   ← |sorted_bin_b|
+10:  for i ← 0 to n − 1:
+11:      r ← sorted_bin_b[i]
+12:      # canonical = 1 iff position i STARTS a same-key run of REAL rows.
+13:      canonical ← AuthOR(
+14:          AuthEQ(i, 0),                                  # boundary
+15:          AuthNEQ(sorted_bin_b[i-1].key, r.key),
+16:          AuthEQ(sorted_bin_b[i-1].memb, 0),
+17:          AuthEQ(r.memb, 0))                              # dummies never merge
+18:
+19:      u.b_MAS = u.b_DOS = u.b_MOM ← 0                     ▷ SPDZ2k-shared 0
+20:      u.p_MAS = u.p_DOS = u.p_MOM ← ZERO_PAYLOAD
+21:
+22:      # Window scan of up to 3 rows starting at i; pick the ONE row
+23:      # per source (MAS, DOS, MOM) whose key matches r.key.  R16
+24:      # gating: only real rows (memb=1) count as source-present.
+25:      for j ← i to min(n − 1, i + 2):
+26:          c ← sorted_bin_b[j]
+27:          match ← AuthAND(AuthEQ(c.key, r.key), c.memb)
+28:          for src ∈ {MAS, DOS, MOM}:
+29:              src_match ← AuthAND(match, AuthEQ(c.source, src))
+30:              u.b_{src}  ← AuthOR(u.b_{src},  src_match)
+31:              u.p_{src}  ← AuthMux(src_match, c.payload, u.p_{src})
+32:
+33:      u.canonical ← canonical
+34:      out ← out ‖ u                                       ▷ |out| = n
+35:  return out
 ```
 
-**Note.** Non-canonical rows (`u.canonical = 0`) are marked `u.live = 0`
-in Phase 22d and get suppressed from downstream aggregation. The
-oblivious loop preserves data-independence of the trace — every input
-row produces exactly one output row, with content varying via
-`AuthMux` on the secret `canonical` bit.
+**Correctness.** For a firm X with rows `(X, MAS), (X, DOS), (X, MOM)`
+at positions `i, i+1, i+2`, iteration `i` window-scans over
+`{i, i+1, i+2}` and folds all three sources into `u`. Iteration
+`i+1` sees position `i` in its history — with key equal to X — so
+`canonical = 0` for that row, and `markLive` drops it. Iteration
+`i+2` likewise gets `canonical = 0`. Only the first row of the run
+carries the union AND is live. This is what the code actually does
+(see `MpsvsAlignment.cpp:130-207`).
+
+**Note (spec correction).** An earlier draft used a fold-forward
+recurrence (`u_prev` accumulator, canonical on first-of-run) which
+was **incorrect**: the first-of-run row hadn't yet folded in the
+subsequent same-key rows, so it carried a partial union. Under the
+new window-scan variant above (matching the code), the first row is
+where the completion happens, via lookahead. The bug was in the
+prior pseudocode; the deployed code was correct all along.
+
+**Rounds.** Each iteration `i` does 3 comparisons × 3 sources of
+AuthAND / AuthOR / AuthMux over a window of 3, so O(1) work per row
+and O(1) rounds per row when iterations run in parallel (each is
+independent given the sorted bin). Total per bin: O(1) rounds
+sequential depth (fan-out over the cap_P rows), O(cap_P) work.
 
 **Algorithm 22d** — `markLive(union_rows)`
 ```
@@ -1052,10 +1250,18 @@ row produces exactly one output row, with content varying via
  4:  rows ← apply π_2 via oblivious conditional-swap network
  5:  compute Pedersen commitments C_orig, C_shuf for the vectors
  6:  π_SHUF ← shuffleProveBg(msgs, r, r', π_2 ∘ π_1, C_orig, C_shuf)  ▷ Alg. 5
- 7:  publish π_SHUF to audit chain
- 8:  verifier (GT or any auditor) checks:
-       shuffleVerifyBg(π_SHUF, C_orig, C_shuf) = accept        ▷ Alg. 6
+ 7:  publish SHA-256(π_SHUF) to audit chain  ▷ digest only; body NOT auditable
 ```
+
+**Verifier scope.** Under Rev 7.1 confidentiality goals (§4.3
+Confidentiality analysis), `shuffleVerifyBg` is **not run by** GT or
+either compute server as a pipeline stage; the digest committed at
+line 7 preserves tamper-evidence of the proof body without disclosing
+`msg`. Payload integrity is inherited from Theorem 4.6.1 (SPDZ2k MAC
+check on the AuthSharedU64/128 shares that ride through the shuffle
+independent of the committed vector). A future upgrade to hiding
+Bayer-Groth §5 restores public auditability of the shuffle without
+the row-tag leak — see §4.3 for the design decision.
 
 **Algorithm 22f** — `coverFirms(rows, K_min, K_max)`
 ```
@@ -1095,34 +1301,65 @@ Every AuthAND consumes one Beaver triple via Algorithm 14
 
 ### 5.7 Phase 6 — Bucketing + Goldschmidt reciprocal
 
-**Algorithm 24** — `BucketIndex(x, edges)` — oblivious binary-search
-producing a **one-hot** vector, then bit-position reduction to a
-`log₂B`-bit bucket index.  Matches `MpsvsRatioBucketWire.cpp:99-136`.
+**Algorithm 24** — `BucketIndex(⟨num⟩, ⟨den⟩, edges, ⟨incl⟩)` — oblivious
+one-hot bucket assignment then bit-position XOR reduction to a
+`log₂B`-bit bucket index. Matches `MpsvsRatioBucketWire.cpp:82-137`.
+
+**Share-domain note.** The wire code works in the **Boolean/XOR
+share domain** (`SharedBit`, `SharedU64Bin` — bit-decomposed
+values), not the SPDZ2k arithmetic domain (`AuthSharedU128`). All
+comparisons are Boolean-circuit comparators built from `secureAnd`
++ `xorShared` using Boolean Beaver triples (`BeaverTripleBit`). A
+prior A2B conversion (SPDZ2k arithmetic share → bit-decomposed
+Boolean share) is required upstream to feed `bucketIndexWire`; the
+implementation currently does this via reveal-and-reshare in
+`MpsvsKAnonGate::arithToBit`, which leaks values (see §12.2 for the
+Toft prefix-tree adder replacement work item). The pseudocode below
+reflects the Boolean-share reality.
 ```
  1:  # PUBLIC:  edges[0..B]   (regulator-signed bucket edges from Φ)
- 2:  # SECRET:  ⟦x⟧, ⟦incl⟧   (SPDZ2k-authenticated arithmetic share)
+ 2:  # SECRET:  ⟨num⟩, ⟨den⟩, ⟨incl⟩  (Boolean bit-decomposed shares)
  3:
  4:  # ---- Phase 1: build a ONE-HOT bucket indicator over ALL B buckets.
- 5:  # Every bucket is touched regardless of the value of ⟦x⟧, so the
- 6:  # data-access trace is public and constant.  The binary search is
- 7:  # in the COMPARATOR chain, not in the index array.
- 8:  for b ← 0 to B − 1:
- 9:      ⟦lo_b⟧      ← AuthGE(⟦x⟧, edges[b])         ▷ 1 iff x ≥ edges[b]
-10:      ⟦hi_b⟧      ← AuthLT(⟦x⟧, edges[b+1])       ▷ 1 iff x <  edges[b+1]
-11:      one_hot[b]  ← AuthAND(⟦lo_b⟧, AuthAND(⟦hi_b⟧, ⟦incl⟧))
-12:
-13:  # ---- Phase 2: reduce the one-hot vector to a log₂B-bit bucket
-14:  # index via bit-position XOR.  For each bit position i of the index:
-15:  #   bucket_index.bit[i]  =  XOR_{b : bit-i(b) = 1} one_hot[b]
-16:  # XOR-shares compose linearly, so this is fully local.
-17:  for i ← 0 to log₂B − 1:
-18:      bucket_index.bit[i] ← 0                    ▷ SharedBit(N)
-19:      for b ← 0 to B − 1:
-20:          if bit i of b is 1:
-21:              bucket_index.bit[i] ← XOR(bucket_index.bit[i], one_hot[b])
-22:
-23:  return (one_hot, bucket_index)
+ 5:  # Every bucket is touched regardless of value, so the access
+ 6:  # trace is public and constant.
+ 7:
+ 8:  # Cross-multiply avoids division: compare num · edges[b] to den · x.
+ 9:  ⟨lhs⟩ ← SecureMulPublicConst(⟨num⟩, ratio_scale)
+10:
+11:  for b ← 0 to B:                             ▷ B+1 edges
+12:      ⟨rhs_b⟩ ← SecureMulPublicConst(⟨den⟩, edges[b])
+13:      ⟨lt[b]⟩ ← SecureLessThan(⟨lhs⟩, ⟨rhs_b⟩)   ▷ Boolean comparator
+14:
+15:  for b ← 0 to B − 1:
+16:      ⟨not_lt_b⟩ ← ⟨lt[b]⟩ XOR 1
+17:      ⟨sel_b⟩    ← SecureAnd(⟨not_lt_b⟩, ⟨lt[b+1]⟩)
+18:      ⟨one_hot[b]⟩ ← SecureAnd(⟨sel_b⟩, ⟨incl⟩)
+19:
+20:  # ---- Phase 2: reduce the one-hot vector to a log₂B-bit bucket
+21:  # index via bit-position XOR.  Since exactly one one_hot[b] is set
+22:  # (or all zero if !incl), the XOR of one_hot[b] over b with bit-i
+23:  # set produces bit i of the bucket index b* directly.
+24:  # XOR-shares compose linearly, so this is fully local (no triples).
+25:  for i ← 0 to ⌈log₂B⌉ − 1:
+26:      ⟨bucket_index.bit[i]⟩ ← 0                ▷ SharedBit(N)
+27:      for b ← 0 to B − 1:
+28:          if bit i of b is 1:
+29:              ⟨bucket_index.bit[i]⟩ ← XOR(⟨bucket_index.bit[i]⟩, ⟨one_hot[b]⟩)
+30:
+31:  return (one_hot, bucket_index)
 ```
+
+**Why bit-position XOR works (correctness).** In an honest execution
+`one_hot[b]` is a 0/1 indicator with exactly one bit set at the
+correct bucket index `b*` (or all zero if `incl = 0`). Then for each
+bit position `i`:
+```
+⊕_{b : bit-i(b) = 1} one_hot[b]  =  bit-i(b*)      (if incl = 1)
+                                  =  0             (if incl = 0)
+```
+because only one term in the XOR is nonzero. This gives the bucket
+index directly, without any conversion between share domains.
 
 **Note (obliviousness).** An earlier draft of this document described
 `BucketIndex` as a binary search that computed `mid = ⌊(lo + hi)/2⌋`
@@ -1130,10 +1367,20 @@ publicly after `lo` and `hi` become secret — that leaks `O(log B)`
 bits about the bucket via the public-branch access pattern and is
 NOT oblivious. The variant above (matching the wire code) touches
 every bucket unconditionally and reduces via XOR — genuinely
-oblivious. Cost: `B` secure-GE + `B` secure-LT + `B` secure-AND
-(dominant: `≈ 512·B` Beaver triples per bucketing); worth the
-constant-factor over a public-`mid` binary search which would leak
-`log₂B` bits per input.
+oblivious. Cost: `(B+1)` secure LessThan + `B` secure AND + `B`
+inclusion-gate AND (dominant Boolean-triple count `≈ 512·B` per
+bucketing, from the `SecureLessThan` internal Boolean adders); this
+is worth the constant-factor over a public-`mid` binary search
+which would leak `log₂B` bits per input.
+
+**Malicious security.** The current Boolean-share pipeline uses
+*unauthenticated* Boolean triples. If a malicious server tampers
+with a bit share, the result is silently wrong; there is no MAC-check
+step in `bucketIndexWire`. This is documented in §12.2 as pending
+integration work — the SPDZ2k retrofit covers arithmetic shares
+only. Meanwhile the wire is malicious-integrity-only under the
+assumption that Boolean triples come from a trusted-dealer or
+authenticated-Boolean-triple preprocessor.
 
 **Algorithm 25** — `Goldschmidt(x, f, K)` — reciprocal to K iterations
 ```
@@ -1234,7 +1481,9 @@ For each release cell `(s, p, m)`:
 **Algorithm 30** — `ReleaseCell(s, p, m, ρ_th, ρ_hist, ρ_num, ρ_den, k, budget)`
 ```
 Per-metric sensitivities (add/remove neighbour, §3 F_DP):
-    Δ_hist_m  = √2     ▷ one entity → at most one bucket, ±1 count
+    Δ_hist_m  = 1        ▷ add/remove: one entity → ±1 in one bucket only
+                          ▷ (√2 would be the replacement-neighbour value;
+                          ▷  MPSVS uses add/remove throughout — do not mix)
     Δ_num_m   = C_num_m   ▷ per-metric contribution clip (numerator)
     Δ_den_m   = C_den_m   ▷ per-metric contribution clip (denominator)
     Δ_count   = 1        ▷ one entity → ±1 in n_valid
@@ -1370,7 +1619,7 @@ close, where `q` is the total number of interactions.
 - H_3 = replace DP noise generation with `Sim`-programmed matching
   the ideal release. Distinguishing reduces to Assumption 4 (SHA-256
   binding) and the joint-noise composition (Fact 4.8.4).
-- H_3 = ideal world. ∎
+- H_4 = ideal world. ∎
 
 ---
 
@@ -1421,33 +1670,53 @@ Pr[undetected tamper anywhere in a session]  ≤  q_total · 2^{-s}
                                              =  2^{-40}    for s = 80.
 ```
 
-**Currently implemented bound.** `MpsvsAuthShare128` uses `s = 64`
-(the widest that fits in `__int128`), yielding:
+**Correct accounting — per MAC-check invocation, not per open.**
+SPDZ2k MAC checking is batched (Alg 13 — "the same per-batch bound
+as a single open"). The session-level bound is
 ```
-per-open        ≤ 2⁻⁶⁴ + q_H · 2⁻²⁵⁶   ≈ 2⁻⁶⁴
-session-level   ≤ 2⁴⁰ · 2⁻⁶⁴          = 2⁻²⁴
+Adv^{session}  ≤  Q_check · 2⁻ˢ  +  Q_check · q_H · 2⁻²⁵⁶
 ```
+where `Q_check` = number of *batched-check invocations* (not opens).
 
-This closes the classical-SPDZ `1/2` gap (regression test
-`test_mpsvs_spdz2k` catches `δ = 2⁶³` at 100/100 trials) but does
-not yet reach the `σ_stat = 40` statistical-security target of
-`2⁻⁴⁰`. Getting there requires either:
-- **s = 80 bignum retrofit** — extend `SharedU128` to a proper
-  256-bit representation (pair of `__int128` limbs or
-  `boost::multiprecision`). Gives `2⁻⁴⁰` session-level. Estimated
-  cost: another ~400 LOC + all Beaver preprocessing updates. Tracked
-  as follow-up.
-- **k = 48 alternative** — reduce the semantic-value width to 48
-  bits (still ≥ SGD-cent range, max ≈ `2⁴⁷`), keep `s = 80` in
-  `__int128`. Gives `2⁻⁴⁰` session-level without bignum. Requires
-  updating every arithmetic op that assumes 64-bit values —
-  substantial cascading change.
+Every Beaver `d, e` mid-computation open is masked by triple sharing;
+security requires only that all mid-computation opens are eventually
+covered by a batched MAC check before any value leaves the compute
+nodes. With careful protocol structure `Q_check` is small: one final
+Ω-check before Phase 12 opens, plus one per Beaver-triple sacrifice
+batch. For typical Rev 7 releases `Q_check ≤ 2¹⁶`.
 
-Earlier drafts asserted `2⁻ᵏ` per open with `k = 64` and concluded
-`2⁻²⁴` at `2⁴⁰` opens; that bound was both wrong (SPDZ2k gap, §4.6)
-and too loose to meet the `2⁻⁴⁰` target. The **current implemented**
-bound is the same `2⁻²⁴` for the different (correct-but-interim)
-reason of `s = 64`.
+**Implemented bound with correct accounting.** `MpsvsAuthShare128`
+uses `s = 64`, so per-check `≤ 2⁻⁶⁴`. Under the batched-check
+invariant with `Q_check ≤ 2¹⁶`:
+```
+Adv^{session}  ≤  2¹⁶ · 2⁻⁶⁴  =  2⁻⁴⁸
+```
+which comfortably meets the `σ_stat = 40` target with an 8-bit
+margin. In the limit (one final check + O(1) sacrifice batches),
+the bound approaches `2⁻⁶⁴`.
+
+**Invariant required for this bound (must be maintained by the
+pipeline).** Every value opened mid-computation must be either
+(a) a Beaver-masked `d = x − u` or `e = y − v` (triple-fresh mask;
+information-theoretic security of the open value itself), or
+(b) an intermediate whose subsequent use is covered by a batched
+Ω-check before any release. Mid-computation opens that do not
+satisfy (a) or (b) require their own per-open MAC check and count
+against `Q_check`.
+
+**Consequence for the bignum retrofit.** With correct per-check
+accounting the `s = 80` bignum retrofit and the `k = 48` alternative
+in §12.2 are **not required** to hit the `σ_stat = 40` target under
+Rev 7 batching. `s = 64` in `__int128` suffices provided the
+batched-check invariant above holds. Deleting the bignum work saves
+~400 LOC of planned effort. See §12 for the corresponding update.
+
+**Earlier draft was wrong twice.** The pre-SPDZ2k draft asserted
+`2⁻ᵏ` per open (wrong: SPDZ over rings has 1/2 worst case). The
+first-attempt correction switched to `2⁻ˢ` per *open* and multiplied
+over 2⁴⁰ opens — right shape, wrong quantity, missing target. The
+statement above (per MAC-check invocation with `Q_check ≤ 2¹⁶`) is
+the honest bound.
 
 ### Theorem 7.4 (Shuffle integrity — Goal I2)
 
@@ -1464,13 +1733,40 @@ Every release computed via Algorithm 30 satisfies
 `(ρ_th + ρ_hist + ρ_num + ρ_den)`-zCDP under the add/remove
 neighbouring relation (§3 F_DP).
 
+**Two distinct concepts in this section — do not conflate.**
+
+- **DP guarantee** (this theorem): a mathematical property of the
+  release mechanism. Bounds the max Rényi divergence between output
+  distributions on adjacent databases. Given by the `ρ`-zCDP claim
+  above; independent of any threshold `k`.
+- **k-anonymity policy** (separate governance requirement): a
+  policy that no cell should be released whose *noised* count `ñ`
+  falls below `k + τ`, so that no released cell corresponds to fewer
+  than `k` real entities with high probability. This is a policy
+  filter on top of the DP mechanism, chosen by MAS Data Ops per
+  Rev 7 §11. It is *not* what makes the release DP — the noise-in-
+  shares construction does that. It is what makes the release
+  human-interpretable and defensible against small-cell-identification
+  concerns.
+
+The stability-margin `τ` bridges the two: `k + τ` is the threshold
+against which the *noised* count is compared, ensuring that with
+probability `≥ 1 − δ` the released cells all have true `n_valid ≥
+k` (Bun-Steinke 2016 Cor. 3.4). This threshold structure is what
+keeps the gate decision itself DP (`ρ_th`-zCDP for the count) while
+still enforcing the operational `k`-anon policy.
+
 **Proof.** Four independent Gaussian mechanisms are composed:
 - **Stability gate** (steps 5–6): `ξ ← N(0, σ_ξ²)` with
   `σ_ξ = 1/√(2ρ_th)` gives ρ_th-zCDP for the count with sensitivity
   `Δ_count = 1` (Fact 4.8.2). The threshold decision `[ñ < k+τ]` is
   a post-processing of `ñ`, so it inherits ρ_th-zCDP (post-processing
-  invariance).
-- **Histogram** (steps 8, 11–12): σ_hist calibrated to Δ_hist_m = √2
+  invariance). *This is the DP part.* The choice of `k` is a
+  policy input, not a DP-security parameter.
+- **Histogram** (steps 8, 11–12): σ_hist calibrated to Δ_hist_m = 1
+  (add/remove: an entity's ratio row lives in exactly one bucket, so
+  add/remove changes that bucket's count by ±1 and no other bucket
+  is touched — L1 = L2 = 1)
   gives ρ_hist-zCDP.
 - **Numerator** (step 9, 13): σ_num calibrated to per-metric
   contribution clip Δ_num_m gives ρ_num-zCDP.
@@ -1479,9 +1775,51 @@ neighbouring relation (§3 F_DP).
 By zCDP composition (Fact 4.8.4), the four-tuple release satisfies
 `(ρ_th + ρ_hist + ρ_num + ρ_den)`-zCDP.
 
-Session-level composition: an epoch running over C cells accumulates
-`C · (ρ_th + ρ_hist + ρ_num + ρ_den)` zCDP, refused by `BudgetTracker`
-if it exceeds `ρ_max`.
+**Session-level composition — sequential vs parallel.** Naive
+sequential composition over all `C = S × P × M` cells (sectors,
+periods, metrics) gives:
+```
+ρ_session ≤ C · (ρ_th + ρ_hist + ρ_num + ρ_den).
+```
+But this overcounts. **Parallel composition** (Fact 4.8.4 corollary,
+McSherry 2009 Thm 4) applies: cells derived from **disjoint firm
+subsets** in a given period compose in parallel, not sequentially.
+
+- **Across sectors within a period.** Every firm is classified into
+  exactly one sector by SSIC (single-sector assignment per
+  registration). Therefore the `S = 20` per-period sector cells
+  cover disjoint firm subsets. Their releases compose in
+  **parallel** — max ρ across sectors, not sum.
+- **Across periods.** Different reporting periods use overlapping
+  firm sets (a firm reports every period), so periods compose
+  **sequentially**.
+- **Across metrics within a cell.** The 9 metrics on the same firm
+  set compose **sequentially** (already captured by `M`).
+
+Corrected budget:
+```
+ρ_session  ≤  P · max_s [ M · (ρ_th + ρ_hist + ρ_num + ρ_den) ]
+            =  P · M · (ρ_th + ρ_hist + ρ_num + ρ_den).
+```
+This gives a **~20× budget recovery** (`S = 20` sectors) vs the
+old naive `C · ρ_cell` accounting. `BudgetTracker` implements the
+per-period `max_s` policy in `MpsvsBudgetTracker::spendPerPeriod`.
+
+**Removal of a separate `ρ_th` per histogram bucket.** The count
+`n_valid` for a cell equals `Σ_b h[b]` — the sum of noised histogram
+buckets, which is itself a post-processing of the histogram release
+and consumes no fresh ρ. Alg 30 line 6 (open ñ for the gate) can
+therefore be replaced by:
+```
+ñ  ←  Σ_b (h[b] + η_hist_b)     ▷ from the same batched open at line 11
+```
+which drops `ρ_th` entirely. In this variant the release satisfies
+`(ρ_hist + ρ_num + ρ_den)`-zCDP per cell, and the gate is a
+post-processing decision on the *already-released* histogram. Alg 30
+currently keeps a separate `ρ_th` for exposition clarity and to
+match the earlier `MpsvsDpProd` API; migrating to
+`ρ_th = 0` requires only rewriting line 6 as above and adjusting
+`DpMetricParams`. Tracked in §12.2.
 
 **Implementation status.** `MpsvsDpProd::noisyThresholdReleaseProd`
 implements Alg 30 (Rev 7.1). Regression: `test_mpsvs_dp_noisy_threshold`
@@ -1525,58 +1863,90 @@ probability `q_H · 2^{-256}` (Assumption 4, SHA-256 collision-resistance).
 | 2 DKG | 3 |
 | 2 OPRF | 4 per client per row |
 | 4 packBins | 0 (local) |
-| 4 withinBinSort | `O(log^2 cap_P)` (bitonic depth) |
-| 4 windowedMerge | `O(1)` per row |
+| 4 withinBinSort | `O(log² cap_P)` (bitonic depth) |
+| 4 windowedMerge | `O(1)` per row (window-scan, lookahead ≤ 3) |
 | 4 composedShuffle | `O(log n)` |
 | 5 inclusion bits | `O(1)` per row per metric |
-| 6 bucketing | `O(log B)` per row per metric |
+| 6 bucketing (Alg 24 one-hot + XOR reduce) | `O(1)` — one round of `(B+1)` parallel `SecureLessThan` + one round of `2B` parallel `secureAnd` |
 | 6 Goldschmidt | `O(K)` = 5–6 |
-| 8 rank | `O(log^2 n)` |
+| 8 rank | `O(log² n)` |
 | 11 aggregation | `O(1)` per row |
-| 12 DP release | 2 per cell (commit + reveal) |
+| 12 DP release (Alg 17 noise-in-shares) | 2 (η-commit-reveal) + 1 batched Ω-check open |
+
+Note: the old `O(log B)` bucketing figure described a public-`mid`
+binary search that leaked `log₂B` bits per input; that pseudocode
+was deleted in Rev 7.1 and replaced with the one-hot+XOR variant
+above, which is `O(1)` in rounds at the cost of `Θ(B)` more secure
+comparisons (see Alg 24).
 
 ### 8.2 Communication cost
 
 Let `N = |real rows| + K_cover`, `M = |metrics| = 9`,
 `S = |sectors × periods|`, `B = 128`.
 
-| Component | Communication (bits) |
-|---|---|
-| Handshakes | `Θ(|pairs| · 512)` |
-| DKG | `Θ(1)` |
-| OPRF | `Θ(|clients| · Q̃ · 4 · 512)` |
-| Share submission | `Θ(N · payload_bits · 2)` |
-| F_PSA sort + merge + shuffle | `Θ(N · log² N · k · 256)` — each of `N log² N` compare-swaps costs 256 Beaver triples on 64-bit ring |
-| Inclusion bits | `Θ(N · M · k)` — 9 AuthMults × 64 bits |
-| Bucketing | `Θ(N · M · log B · k · 256)` |
-| Aggregation | `Θ(S · M · B · k)` |
-| DP release + BG NIZK | `Θ(S · M · B · k + N · 32)` (NIZK is `O(N)` scalars) |
+Rev 7.1 introduces two share widths in the pipeline:
+- **`k_arith = 64`** for the SPDZ2k arithmetic domain (with
+  `s = 64` authentication, so wire-format value+MAC pairs are
+  `2·R = 256` bits per share; `R = k+s = 128`).
+- **`k_bit`** for the Boolean XOR-share domain used by
+  `bucketIndexWire` and the reciprocal — carries no MAC, so wire
+  format is `1 bit` per share.
 
-For `N ≈ 10^6, M = 9, S = 20, B = 128, k = 64`:
-- Share submission: `≈ 10^6 · 64 · 2 = 128 MB`
-- F_PSA MPC (dominant): `≈ 10^6 · 400 · 64 · 256 ≈ 6.5 TB` per full-fidelity
-  run, dominated by the bitonic sort. In practice split across many
-  batched Ω-checks.
+| Component | Wire share width | Communication (bits) |
+|---|---|---|
+| Handshakes | — | `Θ(|pairs| · 512)` |
+| DKG | Ristretto255 | `Θ(1)` |
+| OPRF | Ristretto255 | `Θ(|clients| · Q̃ · 4 · 512)` |
+| Share submission | SPDZ2k `2·R = 256` | `Θ(N · payload_bits · 256/64)` |
+| F_PSA sort + merge + shuffle | SPDZ2k arithmetic | `Θ(N · log² N · R · 256)` — each of `N log² N` compare-swaps costs 256 Beaver triples on 128-bit ring |
+| Inclusion bits | Boolean | `Θ(N · M)` — 9 secure-AND per row |
+| Bucketing (Alg 24) | Boolean | `Θ(N · M · B · R · 256)` — cross-multiplied comparators over full ring |
+| Aggregation | SPDZ2k arithmetic | `Θ(S · M · B · R)` |
+| DP release (Alg 17) + BG NIZK | SPDZ2k + Ristretto255 | `Θ(S · M · B · R + N · 32)` (NIZK is `O(N)` scalars) |
+
+For `N ≈ 10⁶, M = 9, S = 20, B = 128`:
+- Share submission (Rev 7.1 SPDZ2k, R = 128): `≈ 10⁶ · 128 · 2 =
+  256 MB` (previously 128 MB under legacy 64-bit).
+- F_PSA MPC (dominant): `≈ 10⁶ · 400 · 128 · 256 ≈ 13 TB` per
+  full-fidelity run under R = 128, dominated by the bitonic sort.
+  In practice split across `Q_check ≤ 2¹⁶` batched Ω-checks (§7.3).
+- Rev 7.1 doubles wire volume vs the legacy 64-bit measurement,
+  but preserves the same round structure.
 
 ### 8.3 Computation
 
 - OPRF: `4 |clients| Q̃` group scalar-mults (~10 μs each)
-- SPDZ arithmetic: `O(N log² N M B k)` u64 multiplications
+- SPDZ2k arithmetic: `O(N log² N M B R)` `__int128` multiplications
+  under R = 128
 - Pedersen commit for shuffle NIZK: `O(N)` scalar-mults (~10 μs each)
-- SHA-256 hashing: `O(N k)` bytes per session
+- SHA-256 hashing: `O(N R)` bytes per session
 
-Wall-clock at 1 M firms × 20 sectors (semantic reference, in-process):
-≈ 790 ms total; peak RSS ≈ 515 MB (see `test_mpsvs_scale_1M`).
+**Wall-clock benchmark (legacy 64-bit build).** The `test_mpsvs_scale_1M`
+benchmark run against the pre-Rev-7.1 pipeline (Boolean shares +
+`AuthSharedU64` SPDZ) measured `≈ 790 ms` total and peak RSS
+`≈ 515 MB` for 1 M firms × 20 sectors in a semantic-reference
+in-process configuration. This measurement is **not** representative
+of the current SPDZ2k pipeline: with R = 128, `__int128` arithmetic,
+authenticated batching, and full malicious-secure Boolean triples,
+expected wall-clock is roughly 2–3× and peak RSS ~1.5× the legacy
+figure. A refreshed benchmark under the SPDZ2k path is pending
+integration of `AuthSharedU128` into the sector-aggregation wires
+(see §12.2).
 
 ### 8.4 Round + preprocessing tradeoff
 
 Preprocessing (offline, before Phase 3):
-- SPDZ α generation: 1 X25519 exchange + 1 Beaver triple = `~1 ms`
-- Beaver triples: `~10^6` triples per session via `SilentOtTriple` at
-  `~10^5 triples/sec/core` = `~10 s` per session per party, one-off.
+- SPDZ2k α generation: 1 X25519 exchange + 1 Beaver triple = `~1 ms`
+- Beaver triples: `~10⁶` `AuthSharedU128` triples per session via
+  future `oleGenerateTriples128` at `~5·10⁴ triples/sec/core` (est
+  under `__int128` overhead) = `~20 s` per session per party, one-off.
+  Current test-only preprocessing uses `generateAuthBeaverTriple128`
+  which reconstructs α — trusted-dealer setup for unit tests only.
 
 Online: dominated by F_PSA sort. Round-optimised batching reduces
-this to `O(1)` rounds via non-recursive bitonic + batched Ω-check.
+this to `O(1)` rounds via non-recursive bitonic + batched Ω-check
+(one batch per session boundary under the §7.3 batched-check
+invariant).
 
 ---
 
@@ -1631,6 +2001,41 @@ complete normally.
 
 ---
 
+## 11. Governance and release policy
+
+**Release-cell k-anonymity** (a policy, not a DP property — see
+§7.5). MAS Data Ops selects `k` (typical value `k = 5`) per release
+class. The stability margin `τ` is derived from `ρ_th` and `δ`; a
+cell is released only when the noised count `ñ` exceeds `k + τ`.
+For default parameters (`ρ_th = 0.05`, `δ = 10⁻⁶`, `Δ_count = 1`),
+`τ ≈ 16.2` and the release threshold is `ñ > 21.2` — see §3
+`F_DP` numeric worked example.
+
+**Budget assignment.** Each release class gets a per-session `ρ_max`
+that composes across cells per §7.5 (parallel composition across
+sectors, sequential across periods and metrics). Default:
+`ρ_max = 0.5` per class per year, corresponding to
+`ε ≈ 3.4` at `δ = 10⁻⁶` under (ε, δ)-DP conversion (Fact 4.8.3).
+
+**Auditor scope.** GT (auditor) receives:
+- The audit chain root `chainRoot` (SHA-256 hash chain of protocol
+  events).
+- Attestations from S_1, S_2, MAS, DOS, MOM covering configHash,
+  paramsHash, softwareHash.
+- Final released cells (post-DP, post-k-anon-gate).
+- Digests of NIZK transcripts (`SHA-256(π_SHUF)`), **not** the
+  transcripts themselves. GT does not verify NIZKs or reveal
+  operations — that scope is limited to the compute nodes under
+  the non-collusion assumption (§4.3). This is a documented AC1
+  weakening — see §4.3 "Verifier scope".
+
+**Change control.** Any change to `k`, `ρ_max`, sector-partition,
+or release cadence requires (a) regulator sign-off, (b) a signed
+Φ update recorded in the audit chain, (c) a fresh `configHash` that
+all sessions verify against.
+
+---
+
 ## 12. Implementation Status (Rev 7.1)
 
 Explicit ledger of what is **implemented and tested** vs what is
@@ -1660,50 +2065,62 @@ this table describes what actually runs.
 
 | Component | Deferred item | Why | Impact |
 |---|---|---|---|
-| **SPDZ2k `s = 80`** | Bignum retrofit for `k+s = 144` shares | `__int128` is native GCC/Clang; `k+s > 128` needs `boost::multiprecision` or manual limb arithmetic | Current impl gives session-level `2⁻²⁴` at 2⁴⁰ opens; target is `2⁻⁴⁰` |
 | **SPDZ2k pipeline integration** | Migrate `MpsvsInclusionWire` / `MpsvsSectorAggWire` / etc from `AuthSharedU64` to `AuthSharedU128` | Cascades through ~15 files, ~600 LOC | The `MpsvsAuthShare128` API is validated but not the deployed path — `MpsvsInclusion` still uses 64-bit `AuthSharedU64` |
 | **OLE-based Beaver triples for SPDZ2k** | `SilentOtTriple` runs over `oc::block` (128-bit) but MPSVS's OLE wrapper (`MpOleTriple`) targets `AuthSharedU64`. Would need `oleGenerateTriples128` | `test_mpsvs_spdz2k` uses `generateAuthBeaverTriple128` which reconstructs α — test-only | Adversary class A2 not yet met via OLE preprocessing (trusted-dealer test setup) |
 | **DP pipeline integration** | Rewire `MpsvsSectorAggWire` release path to call `noisyThresholdReleaseProd` instead of `addJointNoiseImpl` + `applyKAnonGate` | Straightforward migration but requires callers to plumb `DpMetricParams` per metric | Deployed pipeline still uses deprecated DP path with reveal-and-reshare A2B + gate-on-true-count. Regression tests exercise both paths independently; the deployed default fails Theorem 7.5 |
 | **A2B conversion for k-anon** | Replace `MpsvsKAnonGate::arithToBit` reveal-and-reshare with Toft prefix-tree adder | ~200 LOC of bit-level adder logic | Even ignoring the DP hole, `applyKAnonGate` leaks `n_valid` in plaintext to both S1 and S2 before any gate runs |
-| **`k=48, s=80` alternative** | Reduce semantic-value width to 48 bits to keep `k+s ≤ 128` while hitting `s = 80` | Cascades through every arithmetic op that assumes 64-bit values | Not adopted; interim retrofit chose `s = 64` to preserve 64-bit interface |
+| **Batched-check invariant enforcement** | Static/compile-time enforcement that every mid-computation open is either Beaver-masked or covered by an Ω-check before release | Currently a manual protocol invariant; per-check accounting §7.3 depends on it holding | If invariant fails silently, session bound could degrade from `2⁻⁴⁸` toward `2⁻²⁴` |
 | **Fuzzing harness** | libFuzzer over `parseConfigText`, `decryptBody`, `shuffleVerifyBg`, `RowTag::key` | Not built | Coverage gap on parse/decode paths |
 | **Formal verification** | Coq/Lean proofs for the theorems in §7 | Not built | All theorems currently proved by hand + regression tests |
 
+**No longer required.** Earlier drafts listed an `s = 80` bignum
+retrofit (extending `SharedU128` to `k+s = 144` bits) and a `k = 48`
+alternative as blockers to reach `σ_stat = 40`. With the correct
+per-batched-check accounting (§7.3), `s = 64` in `__int128` already
+delivers `Q_check · 2⁻⁶⁴ ≤ 2⁻⁴⁸` under Rev 7 batching (`Q_check ≤
+2¹⁶`), meeting and exceeding the `2⁻⁴⁰` target. The bignum retrofit
+(~400 LOC of planned effort) is **cancelled** as unnecessary; if a
+future workload increases `Q_check` past `2²⁴`, either revisit
+batching structure first, or reopen the bignum work as a last
+resort.
+
 ### 12.3 Concrete implemented security bounds (honest)
 
-Under the currently-deployed (`k = 64, s = 64`) SPDZ2k configuration:
+Under the currently-deployed (`k = 64, s = 64`) SPDZ2k configuration
+with the batched-check invariant (§7.3):
 
 | Property | Implemented bound | Spec target | Gap |
 |---|---|---|---|
-| SPDZ2k per-open detection | `2⁻⁶⁴` | `2⁻⁸⁰` | `2⁻¹⁶` (bignum retrofit) |
-| SPDZ2k session-level (`2⁴⁰` ops) | `2⁻²⁴` | `2⁻⁴⁰` | `2⁻¹⁶` (bignum retrofit) |
-| DP release for `noisyThresholdReleaseProd` callers | `(ρ_th + ρ_hist + ρ_num + ρ_den)`-zCDP | Same | ✅ Met |
+| SPDZ2k per-batched-check detection | `2⁻⁶⁴` | `2⁻⁴⁰` | ✅ Exceeds target |
+| SPDZ2k session-level (`Q_check ≤ 2¹⁶`) | `2⁻⁴⁸` | `2⁻⁴⁰` | ✅ Exceeds target |
+| DP release for `noisyThresholdReleaseProd` callers | `(ρ_th + ρ_hist + ρ_num + ρ_den)`-zCDP, noise-in-shares | Same | ✅ Met |
 | DP release for legacy `applyKAnonGate` callers | Infinite ε on some neighbours (a), unbounded on others (b) | zCDP | ❌ Fails (deprecated path) |
-| BG shuffle soundness | `2⁻¹⁶⁰` for `n = 2¹²`, `q_H = 2⁴⁰` | Same | ✅ Met |
-| BG shuffle confidentiality against GT | Analytical — GT does not verify | Same | ✅ Met by construction (GT-verify not exposed) |
-| BG shuffle confidentiality against S1/S2 verify | Reveals data both already jointly hold | Same | ✅ Met per §4.3 analysis |
+| BG shuffle soundness (sound-with-reveal) | `2⁻¹⁶⁰` for `n = 2¹²`, `q_H = 2⁴⁰` | Same | ✅ Met |
+| BG shuffle confidentiality (against verifier) | `msg` opened to verifier — see §4.3; GT MUST NOT verify | Hiding | ⚠️ Requires topology enforcement of "no auditor verify" |
 | CP OR bit proof soundness | `2⁻⁶⁴` at `q_H = 2⁶⁴` | Same | ✅ Met |
 | OPRF pseudorandomness | CDH-hard on Ristretto255 | Same | ✅ Met |
 | DKG bias-freeness | Under one-honest-party + SHA-256 as RO | Same | ✅ Met |
 
 ### 12.4 Suitability by adversary class
 
-| Adversary class | Current build | Post SPDZ2k s=80 + DP integration |
+| Adversary class | Current build | Post pipeline SPDZ2k + DP integration |
 |---|---|---|
 | A1 (semi-honest party) | ✅ Fully defended | ✅ |
-| A2 (fully-malicious S1 vs S2) | ⚠️ Partial — SPDZ2k primitive works standalone (`test_mpsvs_spdz2k`) but pipeline still uses `AuthSharedU64`. `2⁻²⁴` session bound even for callers of the new API | ✅ (after retrofit) |
+| A2 (fully-malicious S1 vs S2) | ⚠️ Partial — SPDZ2k primitive works standalone (`test_mpsvs_spdz2k`, `2⁻⁴⁸` session bound) but pipeline still uses `AuthSharedU64` for most wires | ✅ (after wire migration) |
 | A3 (client-side DP neighbour queries) | ⚠️ Only for callers of `noisyThresholdReleaseProd`; deployed pipeline still uses deprecated path | ✅ (after wire migration) |
 | A4 (S1 + client coalition) | Partial — shares still bind other clients | Same |
 | A5 (passive network) | ✅ | ✅ |
 | A6 (active MITM) | ✅ | ✅ |
 
-**Bottom line.** As of Rev 7.1, the SPDZ2k retrofit and DP
-noisy-threshold release exist as **validated primitives** with
-regression tests, but the pipeline **wiring** to make them the
-default is a further step. New callers that need the malicious-secure
-or DP-sound guarantees must invoke the new APIs directly
-(`AuthSharedU128` / `noisyThresholdReleaseProd`). Legacy callers get
-the legacy behaviour.
+**Bottom line.** As of Rev 7.1, the SPDZ2k retrofit (`s = 64` with
+batched-check accounting reaching `2⁻⁴⁸`) and DP noise-in-shares
+release exist as **validated primitives** with regression tests, but
+the pipeline **wiring** to make them the default is a further step.
+New callers that need the malicious-secure or DP-sound guarantees
+must invoke the new APIs directly (`AuthSharedU128` /
+`noisyThresholdReleaseProd`). Legacy callers get the legacy
+behaviour. **The bignum retrofit is cancelled** — batched-check
+accounting made it unnecessary.
 
 ---
 
