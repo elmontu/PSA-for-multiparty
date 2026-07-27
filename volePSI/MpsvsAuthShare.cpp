@@ -228,11 +228,17 @@ void appendU64LE(std::vector<uint8_t>& out, uint64_t v) {
         out.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xFF));
 }
 
-// Compute SHA-256(σ_i || salt_i || party_id) as the commit for shared-α check.
+// Compute SHA-256("mpsvs.audit" || LE64(party) || LE64(σ) || LE64(salt))
+// per PROTOCOL.md Alg 12 line 4. The domain prefix binds the commit to the
+// shared-α MAC-check context and prevents cross-protocol replay.
 std::array<uint8_t, 32> commitSigma(uint32_t party, uint64_t sigma, uint64_t salt) {
     ensureSodiumInit();
+    static const char kDomain[] = "mpsvs.audit";
+    const size_t domain_len = sizeof(kDomain) - 1;   // exclude NUL
+
     std::vector<uint8_t> buf;
-    buf.reserve(4 + 8 + 8);
+    buf.reserve(domain_len + 8 + 8 + 8);
+    buf.insert(buf.end(), kDomain, kDomain + domain_len);
     appendU64LE(buf, party);
     appendU64LE(buf, sigma);
     appendU64LE(buf, salt);

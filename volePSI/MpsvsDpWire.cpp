@@ -15,12 +15,19 @@ namespace mpsvs {
 using mpstar::addShared;
 using mpstar::shareU64;
 
-// SHA-256(party_id || salt || eta bytes)
+// SHA-256("mpsvs.dp.commit" || LE32(party_id) || salt || eta bytes)
+// per PROTOCOL.md Alg 17 line 6. Kept in lockstep with
+// MpsvsDpProd::computeCommitProd so verifyCommit works uniformly
+// across the semantic-ref (this file) and production paths.
 static oc::block computeCommit(uint32_t party_id, const oc::block& salt,
                                 const std::vector<int64_t>& eta) {
     ensureSodiumInit();
+    static const char kDomain[] = "mpsvs.dp.commit";
+    const size_t domain_len = sizeof(kDomain) - 1;
+
     std::vector<uint8_t> buf;
-    buf.reserve(4 + 16 + 8 * eta.size());
+    buf.reserve(domain_len + 4 + 16 + 8 * eta.size());
+    buf.insert(buf.end(), kDomain, kDomain + domain_len);
     buf.push_back(static_cast<uint8_t>(party_id & 0xff));
     buf.push_back(static_cast<uint8_t>((party_id >> 8) & 0xff));
     buf.push_back(static_cast<uint8_t>((party_id >> 16) & 0xff));

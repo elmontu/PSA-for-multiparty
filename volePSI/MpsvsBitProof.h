@@ -32,9 +32,15 @@
 #include "MpRistretto.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace volePSI {
 namespace mpsvs {
+
+// Caller-supplied context for Fiat-Shamir domain separation.
+// Typically the session ctx bytes (session_id ‖ nonce ‖ configHash ...).
+// Empty ctx is allowed for standalone tests but discouraged for wire use.
+using BitProofCtx = std::vector<uint8_t>;
 
 using mpstar::PedersenCommitment;
 using mpstar::R255Point;
@@ -54,11 +60,16 @@ PedersenCommitment commitBit(int b, const R255Scalar& r);
 
 // Prove that C = g^b · h^r with b ∈ {0, 1}.
 // If b ∉ {0, 1}, throws (no valid proof).
-BitProof proveBit(int bit, const R255Scalar& r, const PedersenCommitment& C);
+// `ctx` is the caller's Fiat-Shamir domain-separation context per
+// PROTOCOL.md Alg 8 line 5. Pass an empty vector for standalone tests
+// (loses cross-session replay protection; not for wire deployment).
+BitProof proveBit(int bit, const R255Scalar& r, const PedersenCommitment& C,
+                    const BitProofCtx& ctx);
 
 // Verify a BitProof against commitment C.
-// Returns TRUE iff C opens to bit ∈ {0, 1}.
-bool verifyBit(const BitProof& proof, const PedersenCommitment& C);
+// Returns TRUE iff C opens to bit ∈ {0, 1} under the same `ctx`.
+bool verifyBit(const BitProof& proof, const PedersenCommitment& C,
+                const BitProofCtx& ctx);
 
 } // namespace mpsvs
 } // namespace volePSI

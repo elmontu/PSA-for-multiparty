@@ -19,8 +19,8 @@ static void test_prove_bit_0() {
     std::printf("--- C1: proveBit(0) → verify accepts ---\n");
     R255Scalar r = R255Scalar::random();
     PedersenCommitment C = commitBit(0, r);
-    BitProof pi = proveBit(0, r, C);
-    bool ok = verifyBit(pi, C);
+    BitProof pi = proveBit(0, r, C, /*ctx=*/{});
+    bool ok = verifyBit(pi, C, /*ctx=*/{});
     CHECK(ok, "C1: honest proof for b=0 verifies");
 }
 
@@ -28,8 +28,8 @@ static void test_prove_bit_1() {
     std::printf("--- C2: proveBit(1) → verify accepts ---\n");
     R255Scalar r = R255Scalar::random();
     PedersenCommitment C = commitBit(1, r);
-    BitProof pi = proveBit(1, r, C);
-    bool ok = verifyBit(pi, C);
+    BitProof pi = proveBit(1, r, C, /*ctx=*/{});
+    bool ok = verifyBit(pi, C, /*ctx=*/{});
     CHECK(ok, "C2: honest proof for b=1 verifies");
 }
 
@@ -57,11 +57,11 @@ static void test_swap_c_rejects() {
     std::printf("--- C5: honest proof for one C rejected against different C' ---\n");
     R255Scalar r0 = R255Scalar::random();
     PedersenCommitment C0 = commitBit(0, r0);
-    BitProof pi = proveBit(0, r0, C0);
+    BitProof pi = proveBit(0, r0, C0, /*ctx=*/{});
     // Use a DIFFERENT commitment for verify (different randomness).
     R255Scalar r1 = R255Scalar::random();
     PedersenCommitment C_other = commitBit(0, r1);
-    bool ok = verifyBit(pi, C_other);
+    bool ok = verifyBit(pi, C_other, /*ctx=*/{});
     CHECK(!ok, "C5: proof bound to C0 does not verify against different C");
 }
 
@@ -69,11 +69,22 @@ static void test_tampered_proof_rejected() {
     std::printf("--- C6: tampered proof (modified s0) → REJECTED ---\n");
     R255Scalar r = R255Scalar::random();
     PedersenCommitment C = commitBit(1, r);
-    BitProof pi = proveBit(1, r, C);
+    BitProof pi = proveBit(1, r, C, /*ctx=*/{});
     // Tamper with s0.
     pi.s0 = scalarAdd(pi.s0, R255Scalar::one());
-    bool ok = verifyBit(pi, C);
+    bool ok = verifyBit(pi, C, /*ctx=*/{});
     CHECK(!ok, "C6: tampered response (s0) causes verify to reject");
+}
+
+static void test_ctx_mismatch_rejected() {
+    std::printf("--- C7-ctx: proof under ctx1 does NOT verify under ctx2 ---\n");
+    R255Scalar r = R255Scalar::random();
+    PedersenCommitment C = commitBit(1, r);
+    BitProofCtx ctx1 = {'s', 'e', 's', 's', 'i', 'o', 'n', '1'};
+    BitProofCtx ctx2 = {'s', 'e', 's', 's', 'i', 'o', 'n', '2'};
+    BitProof pi = proveBit(1, r, C, ctx1);
+    CHECK(verifyBit(pi, C, ctx1),  "C7-ctx-a: proof verifies under matching ctx1");
+    CHECK(!verifyBit(pi, C, ctx2), "C7-ctx-b: proof REJECTS under different ctx2");
 }
 
 static void test_batch_catch_rate() {
@@ -104,6 +115,7 @@ int main() {
     test_bit_42_rejected();
     test_swap_c_rejects();
     test_tampered_proof_rejected();
+    test_ctx_mismatch_rejected();
     test_batch_catch_rate();
 
     std::printf("\n");

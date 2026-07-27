@@ -16,14 +16,32 @@ using mpstar::scalarMul;
 using mpstar::scalarNegate;
 using mpstar::scalarSub;
 
-// Fiat-Shamir challenge: hash( C || A0 || A1 ) → scalar.
+// Fiat-Shamir challenge per PROTOCOL.md Alg 8 line 5 / Alg 9 line 1:
+//   hashToScalar("mpsvs.bitproof" ‖ ctx ‖ LP(C) ‖ LP(A0) ‖ LP(A1))
+// where LP(·) is 8-byte little-endian length prefix + bytes. The
+// domain string binds the challenge to this proof system; ctx binds
+// it to the caller's session/round — together preventing cross-context
+// or cross-protocol replay attacks.
 static R255Scalar fsChallenge(const R255Point& C,
                                 const R255Point& A0,
-                                const R255Point& A1) {
+                                const R255Point& A1,
+                                const BitProofCtx& ctx) {
+    static const char kDomain[] = "mpsvs.bitproof";
+    const size_t domain_len = sizeof(kDomain) - 1;
+
+    auto appendLP = [](std::vector<uint8_t>& out, const uint8_t* p, size_t n) {
+        for (int i = 0; i < 8; ++i)
+            out.push_back(static_cast<uint8_t>((n >> (8 * i)) & 0xFF));
+        out.insert(out.end(), p, p + n);
+    };
+
     std::vector<uint8_t> buf;
-    buf.insert(buf.end(), C.bytes.begin(), C.bytes.end());
-    buf.insert(buf.end(), A0.bytes.begin(), A0.bytes.end());
-    buf.insert(buf.end(), A1.bytes.begin(), A1.bytes.end());
+    buf.reserve(domain_len + 8 + ctx.size() + 3 * (8 + 32));
+    buf.insert(buf.end(), kDomain, kDomain + domain_len);
+    appendLP(buf, ctx.data(), ctx.size());
+    appendLP(buf, C.bytes.data(),  C.bytes.size());
+    appendLP(buf, A0.bytes.data(), A0.bytes.size());
+    appendLP(buf, A1.bytes.data(), A1.bytes.size());
     return hashToScalar(buf);
 }
 
@@ -47,7 +65,8 @@ PedersenCommitment commitBit(int b, const R255Scalar& r) {
     return c;
 }
 
-BitProof proveBit(int bit, const R255Scalar& r, const PedersenCommitment& C) {
+BitProof proveBit(int bit, const R255Scalar& r, const PedersenCommitment& C,
+                    const BitProofCtx& ctx) {
     if (bit != 0 && bit != 1)
         throw std::invalid_argument("proveBit: bit must be 0 or 1");
 
@@ -70,7 +89,7 @@ BitProof proveBit(int bit, const R255Scalar& r, const PedersenCommitment& C) {
         R255Point term2 = scalarMult(pi.c1, T1);
         pi.A1 = pointSub(term1, term2);
         // FS challenge combining A0, A1.
-        R255Scalar c_combined = fsChallenge(C.c, pi.A0, pi.A1);
+        R255Scalar c_combined = fsChallenge(C.c, pi.A0, pi.A1, ctx);
         pi.c0 = scalarSub(c_combined, pi.c1);   // c0 = c - c1
         // Real response for branch 0.
         pi.s0 = scalarAdd(w0, scalarMul(pi.c0, r));
@@ -84,16 +103,17 @@ BitProof proveBit(int bit, const R255Scalar& r, const PedersenCommitment& C) {
         R255Point term1 = scalarMult(pi.s0, H());
         R255Point term2 = scalarMult(pi.c0, T0);
         pi.A0 = pointSub(term1, term2);
-        R255Scalar c_combined = fsChallenge(C.c, pi.A0, pi.A1);
+        R255Scalar c_combined = fsChallenge(C.c, pi.A0, pi.A1, ctx);
         pi.c1 = scalarSub(c_combined, pi.c0);
         pi.s1 = scalarAdd(w1, scalarMul(pi.c1, r));
     }
     return pi;
 }
 
-bool verifyBit(const BitProof& pi, const PedersenCommitment& C) {
-    // Recompute Fiat-Shamir challenge.
-    R255Scalar c_combined = fsChallenge(C.c, pi.A0, pi.A1);
+bool verifyBit(const BitProof& pi, const PedersenCommitment& C,
+                const BitProofCtx& ctx) {
+    // Recompute Fiat-Shamir challenge under the same ctx.
+    R255Scalar c_combined = fsChallenge(C.c, pi.A0, pi.A1, ctx);
     R255Scalar c_sum = scalarAdd(pi.c0, pi.c1);
     if (!(c_sum == c_combined)) return false;
 

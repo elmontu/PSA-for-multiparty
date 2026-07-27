@@ -41,13 +41,22 @@ int64_t sampleGaussianCsprng(double sigma) {
 }
 
 // ---------------------------------------------------------------------------
-// SHA-256(party_id || salt || eta bytes) — matches MpsvsDpWire's format
-// so verifyCommit works for both mt19937 and CSPRNG variants.
+// SHA-256("mpsvs.dp.commit" || LE32(party_id) || salt || eta bytes)
+// per PROTOCOL.md Alg 17 line 6. Domain-separated + party-tagged so a
+// commit from party 1 cannot be replayed as party 2, and cannot be reused
+// across protocols. Output truncated to oc::block (16 bytes) for storage
+// compatibility with the semantic-ref path; the full 32-byte SHA-256 is
+// computed and truncated.
 // ---------------------------------------------------------------------------
 static oc::block computeCommitProd(uint32_t party_id, const oc::block& salt,
                                      const std::vector<int64_t>& eta) {
+    static const char kDomain[] = "mpsvs.dp.commit";
+    const size_t domain_len = sizeof(kDomain) - 1;
+
     std::vector<uint8_t> buf;
-    buf.reserve(4 + 16 + 8 * eta.size());
+    buf.reserve(domain_len + 4 + 16 + 8 * eta.size());
+    buf.insert(buf.end(), kDomain, kDomain + domain_len);
+    // LE32 party id (matches format in PROTOCOL.md).
     buf.push_back(static_cast<uint8_t>(party_id & 0xff));
     buf.push_back(static_cast<uint8_t>((party_id >> 8) & 0xff));
     buf.push_back(static_cast<uint8_t>((party_id >> 16) & 0xff));
@@ -124,16 +133,29 @@ static SharedNoisyHistogram addJointNoiseImpl(
         c2 = sampleAndCommitProd(1, num_bins, sigma_pp);
     }
 
-    // Verify commits — if mismatch, log abort + throw.
-    auto verify_or_log = [&](const NoiseCommit& c) {
+    // ─── Phase B: commit-exchange ────────────────────────────────────────
+    // Snapshot both commits BEFORE any (η, salt) is exchanged, matching
+    // the two-phase pattern of openWithMacCheckShared (see PROTOCOL.md
+    // Alg 17 rounds 7–9). A wire-level impl replicates this ordering by
+    // physically not sending (η, salt) until both `commit` values are on
+    // the wire; the semantic reference enforces it by copying `commit`
+    // into an immutable snapshot here.
+    const oc::block commit_of_1 = c1.commit;
+    const oc::block commit_of_2 = c2.commit;
+
+    // ─── Phase C: reveal + verify peer's commit ──────────────────────────
+    // On reveal, each side receives peer's (η, salt) and recomputes the
+    // commit hash to compare against the earlier snapshot. sodium_memcmp
+    // gives CT byte comparison (defence-in-depth against timing signals).
+    auto verify_or_log = [&](const NoiseCommit& c, const oc::block& snapshot) {
         auto expected = computeCommitProd(c.party_id, c.salt, c.eta);
-        if (std::memcmp(&expected, &c.commit, 16) != 0) {
+        if (sodium_memcmp(&expected, &snapshot, 16) != 0) {
             audit_log.append(AbortReason::DP_COMMIT_MISMATCH, ctx);
             return false;
         }
         return true;
     };
-    if (!verify_or_log(c1) || !verify_or_log(c2)) {
+    if (!verify_or_log(c1, commit_of_1) || !verify_or_log(c2, commit_of_2)) {
         // CRITICAL: DP failure must NOT return un-noised data. Attacker
         // triggering commit mismatch would otherwise obtain raw plaintext.
         // Throw + rely on caller's transaction rollback / abort protocol.
